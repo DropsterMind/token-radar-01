@@ -347,11 +347,19 @@
   function categoryPanel() {
     var stats = DATA.category_stats || [];
     var rows = stats.map(function (s) {
-      return el('tr', null,
+      return el('tr', {
+        tabindex: '0',
+        onclick: function () { openDetail(s.top_slug); },
+        onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(s.top_slug); } }
+      },
         el('td', null, el('b', { text: s.category })),
         el('td', { class: 'num', text: String(s.rows) }),
         el('td', { class: 'num', text: String(s.watchlist_rows) }),
-        el('td', { class: 'num', text: fmtUsd(s.median_tvl_usd) })
+        el('td', { class: 'num', text: fmtUsd(s.median_tvl_usd) }),
+        el('td', null, el('div', { class: 'name' },
+          el('b', { text: s.top_name }),
+          el('span', { class: 'sub', text: fmtUsd(s.top_implied_usd) + ' implied' })
+        ))
       );
     });
     return el('section', { class: 'panel model' },
@@ -363,11 +371,13 @@
             el('th', { scope: 'col', text: 'Category' }),
             el('th', { scope: 'col', text: 'Board rows' }),
             el('th', { scope: 'col', text: 'Watchlist rows' }),
-            el('th', { scope: 'col', text: 'Median TVL' })
+            el('th', { scope: 'col', text: 'Median TVL' }),
+            el('th', { scope: 'col', text: 'Strongest row' })
           )),
           el('tbody', null, rows)
         )
-      )
+      ),
+      el('p', { class: 'sub', text: 'Select a category row to open its strongest protocol.' })
     );
   }
 

@@ -175,12 +175,15 @@ export interface PeerEntry {
   n: number;
 }
 
-/** One category's share of the board: how many rows it holds, how many of them are watchlist rows, and their median TVL. */
+/** One category's share of the board: how many rows it holds, how many of them are watchlist rows, their median TVL, and its strongest row. */
 export interface CategoryStat {
   category: string;
   rows: number;
   watchlist_rows: number;
   median_tvl_usd: number;
+  top_slug: string;
+  top_name: string;
+  top_implied_usd: number;
 }
 
 /** Everything the dashboard needs: the board, the live set, the peer table, the model. */
@@ -548,27 +551,32 @@ export function radarRow(row: BoardRow): RadarRow {
   };
 }
 
-/** Per-category board coverage: rows, watchlist rows and median TVL, largest category first. */
+/** Per-category board coverage: rows, watchlist rows, median TVL and the category's strongest row, largest category first. */
 export function categoryStats(board: BoardRow[], snapshot: Snapshot): CategoryStat[] {
   const watchlist = new Set(snapshot.watchlist);
-  const grouped = new Map<string, { tvls: number[]; watchlistRows: number }>();
+  const grouped = new Map<string, { rows: BoardRow[]; watchlistRows: number }>();
   for (const row of board) {
     const key = row.category ?? 'Other';
     const bucket = grouped.get(key);
-    if (bucket === undefined) grouped.set(key, { tvls: [row.tvl_usd], watchlistRows: watchlist.has(row.slug) ? 1 : 0 });
+    if (bucket === undefined) grouped.set(key, { rows: [row], watchlistRows: watchlist.has(row.slug) ? 1 : 0 });
     else {
-      bucket.tvls.push(row.tvl_usd);
+      bucket.rows.push(row);
       if (watchlist.has(row.slug)) bucket.watchlistRows += 1;
     }
   }
   const stats: CategoryStat[] = [];
   for (const [category, bucket] of grouped) {
-    const sorted = [...bucket.tvls].sort((a, b) => a - b);
+    // The board is already ranked, so the first row of a category is its strongest.
+    const top = bucket.rows[0]!;
+    const tvls = bucket.rows.map((r) => r.tvl_usd).sort((a, b) => a - b);
     stats.push({
       category,
-      rows: bucket.tvls.length,
+      rows: bucket.rows.length,
       watchlist_rows: bucket.watchlistRows,
-      median_tvl_usd: medianOf(sorted),
+      median_tvl_usd: medianOf(tvls),
+      top_slug: top.slug,
+      top_name: top.name,
+      top_implied_usd: top.implied_value_usd,
     });
   }
   stats.sort((a, b) => b.rows - a.rows || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0));
