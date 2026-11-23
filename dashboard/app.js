@@ -1,6 +1,7 @@
-// Token Radar's plain dashboard. It reads window.RADAR (written beside dashboard/ by main.ts) and
-// renders the ranked board, a filterable table, a per-protocol detail drawer with the model's own
-// inputs and the protocol's farm plan. No network: every byte it shows is in data.js.
+// Token Radar dashboard. It reads window.RADAR (written beside dashboard/ by
+// main.ts) and renders the ranked board, a filterable table, and a per-protocol
+// detail drawer with the model's own inputs and the protocol's farm plan.
+// No network: every byte it shows is in data.js.
 (function () {
   'use strict';
 
@@ -26,18 +27,20 @@
     if (days >= 365) return (days / 365).toFixed(1) + 'y';
     return Math.max(0, Math.round(days)) + 'd';
   }
-  // The model in one function: the page recomputes a row from the snapshot figures and checks the
-  // number board.json carries, so the page's code and the board's data are visibly the same arithmetic.
-  // Peer multiple is per-category, derived from live-token protocols in the snapshot itself;
-  // size is a mild sub-linear dampener, (TVL / $100M) ^ -0.07 clamped to [0.75, 1.25].
+
+  // The model in one function: the page recomputes a row from the snapshot
+  // figures and checks the number board.json carries, so the page's code and
+  // the board's data are visibly the same arithmetic. The peer multiple is
+  // per-category, derived from live-token protocols in the snapshot itself;
+  // size is a mild sub-linear dampener, (TVL / $100M) ^ -0.07, clamped to
+  // [0.75, 1.25]. Size is recomputed from TVL here, not taken from the rounded
+  // value board.json carries, so the recomputation matches to the dollar.
   function impliedOf(row, model) {
     var growth = Math.min(model.growth_cap, Math.max(model.growth_floor, row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d));
     var growthMult = 1 + (growth / 100) * model.growth_weight;
     var age = row.age_days === null || row.age_days === undefined ? model.unknown_age_days : row.age_days;
     var maturity = model.maturity_floor + (Math.min(Math.max(age, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
     var peer = row.peer_multiple === null || row.peer_multiple === undefined ? model.base_multiple : row.peer_multiple;
-    // Recompute size from TVL, not from the rounded value board.json carries, so the
-    // recomputation matches the board to the dollar instead of differing by rounding.
     var size = Math.min(1.25, Math.max(0.75, Math.pow(row.tvl_usd / 100000000, -0.07)));
     return Math.max(1, Math.round(row.tvl_usd * peer * growthMult * maturity * size));
   }
@@ -63,8 +66,9 @@
     return node;
   }
 
-  // The farm plan is the same derivation main.ts writes to board.json: category, chains, TVL and age
-  // decide the action, the capital, the hold and every cost and time. No name is special-cased.
+  // The farm plan is the same derivation main.ts writes to board.json:
+  // category, chains, TVL and age decide the action, the capital, the hold
+  // and every cost and time. No name is special-cased.
   function chainOf(p) { return p.chains && p.chains.length > 0 ? p.chains[0] : 'its main chain'; }
   function capitalFor(p) {
     if (p.tvl_usd >= 5e9) return 250;
