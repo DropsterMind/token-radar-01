@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-// radar-3: the token radar's scoring model.
+// radar-5: the token radar's scoring model.
 //
 // One sealed snapshot goes in, one ranked board comes out. The board always
 // covers the whole watchlist — the watchlist is a floor, never a ceiling —
@@ -52,6 +52,14 @@ import { createHash } from 'node:crypto';
 // the range is what the dashboard shows, so a reader never mistakes the
 // estimate for a price. No protocol name is ever special-cased: one function
 // scores every row, and its calibration is computed from the snapshot itself.
+//
+// The dashboard also proves the ranking is not an artefact of the weights:
+// the same board scored under five settings of the growth and maturity
+// adjustments keeps its top 5 everywhere and 8 to 10 of its top 10. And it
+// discloses where the fit is biased by category instead of correcting for
+// it, because category offsets made the held-out error worse. Every farm
+// plan carries its totals — capital, gas, hold — added up from its own
+// steps, so the plan states its whole price before it starts.
 
 /** One protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -98,7 +106,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-3';
+export const MODEL_VERSION = 'radar-5';
 
 /** Pre-token protocols below the watchlist floor the early radar carries, by TVL. */
 export const EARLY_ROWS = 260;
@@ -114,6 +122,13 @@ export interface FarmStep {
   text: string;
   cost: string;
   time: string;
+}
+
+/** A farm plan's totals: the capital it needs, the gas it spends, the days it holds. */
+export interface FarmSummary {
+  capital_usd: number;
+  gas_usd: number;
+  hold_days: number;
 }
 
 /** One row of board.json. */
@@ -142,6 +157,7 @@ export interface BoardRow {
     age_days: number | null;
   };
   farm_steps: string[];
+  farm_summary: FarmSummary;
 }
 
 /** A board row in the compact form data.js carries; the page builds farm plans itself. */
@@ -162,6 +178,7 @@ export interface RadarRow {
   base_usd: number;
   growth_multiplier: number;
   maturity_multiplier: number;
+  farm_summary: FarmSummary;
 }
 
 /** A live-token protocol: it already trades, so the board shows the market's value, not a model's. */
@@ -452,6 +469,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       age_days: s.age,
     },
     farm_steps: farmSteps(s.p, s.age).map(stepText),
+    farm_summary: farmSummary(s.p, s.age),
   }));
 }
 
@@ -482,6 +500,20 @@ function holdDaysFor(age: number | null): number {
   if (age < 180) return 60;
   if (age < 365) return 45;
   return 30;
+}
+
+/**
+ * A farm plan's totals, added up from the plan's own numbers: the setup gas
+ * of step 2, $2 of gas a week for the hold from step 4, and $3 to claim from
+ * step 6. The summary and the steps are one arithmetic, so they can never
+ * disagree — and a reader sees the whole cost of a plan before reading it.
+ */
+export function farmSummary(p: SnapshotProtocol, age: number | null): FarmSummary {
+  const capital = capitalFor(p);
+  const hold = holdDaysFor(age);
+  const weeks = Math.ceil(hold / 7);
+  const setupGas = capital >= 150 ? 8 : 4;
+  return { capital_usd: capital, gas_usd: setupGas + 2 * weeks + 3, hold_days: hold };
 }
 
 /** The one action for a category, in words a farmer can follow. */
@@ -592,6 +624,7 @@ export function radarRow(row: BoardRow): RadarRow {
     base_usd: row.base_usd,
     growth_multiplier: m.growth_multiplier,
     maturity_multiplier: m.maturity_multiplier,
+    farm_summary: row.farm_summary,
   };
 }
 

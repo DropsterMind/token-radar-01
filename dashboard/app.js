@@ -240,7 +240,7 @@
       onclick: function () { openDetail(r.slug); },
       onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(r.slug); } }
     },
-      el('td', { class: 'num', text: String(r.rank) }),
+      el('td', { class: 'num' + (r.rank <= 3 ? ' rank-top' : ''), text: String(r.rank) }),
       el('td', null, el('div', { class: 'name' },
         el('b', { text: r.name }),
         el('span', { class: 'sub', text: (r.category || 'Other') + ' on ' + chainText })
@@ -535,15 +535,24 @@
       ),
       el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': the same function scores every protocol. The page recomputes this row as ' + fmtUsd(impliedOf(row, DATA.model)) + (impliedOf(row, DATA.model) === row.implied_value_usd ? ', the same number board.json carries.' : ', which differs from the board: the data would be stale.') + ' This is an estimate, not a price, and no token is promised.' })
     ));
-    dialog.appendChild(el('section', { class: 'detail-section' },
+    var summary = row.farm_summary || null;
+    var summaryCard = summary ? el('div', { class: 'farm-summary' },
+      el('div', null, el('span', { text: 'Capital needed' }), el('b', { class: 'num', text: '$' + summary.capital_usd })),
+      el('div', null, el('span', { text: 'Gas, whole plan' }), el('b', { class: 'num', text: '~$' + summary.gas_usd })),
+      el('div', null, el('span', { text: 'Hold' }), el('b', { class: 'num', text: summary.hold_days + ' days' }))
+    ) : null;
+    var farmSection = el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm plan' }),
+      el('p', { class: 'sub', text: 'Seven steps, each with its cost and time. The totals above are the steps added up — setup gas, $2 of gas a week for the hold, and $3 to claim — so the plan states its whole price before it starts.' }),
       el('ol', { class: 'steps' }, steps.map(function (s) {
         var at = s.indexOf(' Cost: ');
         var action = at >= 0 ? s.slice(0, at) : s;
         var tail = at >= 0 ? s.slice(at + 1) : '';
         return el('li', null, el('b', { text: action }), el('span', { class: 'cost', text: tail }));
       }))
-    ));
+    );
+    if (summaryCard) farmSection.insertBefore(summaryCard, farmSection.children[1]);
+    dialog.appendChild(farmSection);
     if (typeof dialog.showModal === 'function') {
       if (!dialog.open) dialog.showModal();
     } else {
