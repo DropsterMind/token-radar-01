@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-// radar-5: the token radar's scoring model.
+// radar-6: the token radar's scoring model.
 //
 // One sealed snapshot goes in, one ranked board comes out. The board always
 // covers the whole watchlist — the watchlist is a floor, never a ceiling —
@@ -59,7 +59,11 @@ import { createHash } from 'node:crypto';
 // discloses where the fit is biased by category instead of correcting for
 // it, because category offsets made the held-out error worse. Every farm
 // plan carries its totals — capital, gas, hold — added up from its own
-// steps, so the plan states its whole price before it starts.
+// steps, so the plan states its whole price before it starts. And no two
+// plans are the same template: the weekly action, the points page, the risk
+// note, the chain and the gas all follow from the protocol's own category
+// and chains, with gas tiered by chain and the cheapest of a protocol's own
+// chains chosen for the action.
 
 /** One protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -106,7 +110,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-5';
+export const MODEL_VERSION = 'radar-6';
 
 /** Pre-token protocols below the watchlist floor the early radar carries, by TVL. */
 export const EARLY_ROWS = 260;
@@ -481,9 +485,36 @@ export function stepText(step: FarmStep): string {
   return s;
 }
 
-/** The first chain a protocol names, or a neutral phrase when it names none. */
-function chainOf(p: SnapshotProtocol): string {
-  return p.chains.length > 0 ? p.chains[0]! : 'its main chain';
+/** A chain's gas tier: how expensive its transactions are, in rough bands. Only Ethereum and Bitcoin sit in the high band; the named L2s sit in the middle; everything else — the cheap L1s and the chains this table does not name — sits in the low band. The figures are estimates, and the plan labels them as such. */
+export type GasTier = 'high' | 'mid' | 'low';
+
+const MID_TIER_CHAINS = new Set([
+  'Arbitrum', 'Optimism', 'Base', 'Polygon', 'zkSync Era', 'Linea', 'Scroll', 'Blast', 'Ink', 'Mode', 'Fraxtal', 'Mantle', 'Unichain', 'Sonic', 'Berachain', 'Hyperliquid L1', 'Monad', 'Plasma',
+]);
+
+/** Gas in dollars for one setup, one weekly action, and one claim, by tier. */
+const GAS_USD: Record<GasTier, { setup: number; weekly: number; claim: number }> = {
+  high: { setup: 15, weekly: 10, claim: 5 },
+  mid: { setup: 4, weekly: 2, claim: 2 },
+  low: { setup: 1, weekly: 1, claim: 1 },
+};
+
+/** A chain's gas tier from its name. */
+export function chainTier(chain: string): GasTier {
+  if (chain === 'Ethereum' || chain === 'Bitcoin') return 'high';
+  if (MID_TIER_CHAINS.has(chain)) return 'mid';
+  return 'low';
+}
+
+/** The cheapest chain a protocol runs on, by gas tier; ties keep the first chain the snapshot lists. */
+export function cheapestChain(p: SnapshotProtocol): { chain: string; tier: GasTier } {
+  if (p.chains.length === 0) return { chain: 'its main chain', tier: 'mid' };
+  const rank: Record<GasTier, number> = { high: 2, mid: 1, low: 0 };
+  let best = p.chains[0]!;
+  for (const chain of p.chains) {
+    if (rank[chainTier(chain)] < rank[chainTier(best)]) best = chain;
+  }
+  return { chain: best, tier: chainTier(best) };
 }
 
 /** The capital one farm position needs, from the protocol's own TVL. */
@@ -504,47 +535,115 @@ function holdDaysFor(age: number | null): number {
 
 /**
  * A farm plan's totals, added up from the plan's own numbers: the setup gas
- * of step 2, $2 of gas a week for the hold from step 4, and $3 to claim from
- * step 6. The summary and the steps are one arithmetic, so they can never
- * disagree — and a reader sees the whole cost of a plan before reading it.
+ * of step 2, the weekly gas for the hold from step 4, and the claim gas —
+ * all on the cheapest of the protocol's own chains. The summary and the
+ * steps are one arithmetic, so they can never disagree — and a reader sees
+ * the whole cost of a plan before reading it.
  */
 export function farmSummary(p: SnapshotProtocol, age: number | null): FarmSummary {
   const capital = capitalFor(p);
   const hold = holdDaysFor(age);
   const weeks = Math.ceil(hold / 7);
-  const setupGas = capital >= 150 ? 8 : 4;
-  return { capital_usd: capital, gas_usd: setupGas + 2 * weeks + 3, hold_days: hold };
+  const gas = GAS_USD[cheapestChain(p).tier];
+  return { capital_usd: capital, gas_usd: gas.setup + gas.weekly * weeks + gas.claim, hold_days: hold };
+}
+
+/** One of the eleven kinds a category falls into, in the order the branches below check. */
+type CategoryKind = 'lending' | 'dex' | 'bridge' | 'staking' | 'perps' | 'prediction' | 'curator' | 'stable' | 'rwa' | 'insurance' | 'other';
+
+/** A protocol's kind from its category name, lowercased. */
+function categoryKind(p: SnapshotProtocol): CategoryKind {
+  const c = (p.category ?? '').toLowerCase();
+  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return 'lending';
+  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return 'dex';
+  if (c.includes('bridge')) return 'bridge';
+  if (c.includes('staking') || c.includes('restak')) return 'staking';
+  if (c.includes('perpetual') || c.includes('derivative')) return 'perps';
+  if (c.includes('prediction')) return 'prediction';
+  if (c.includes('curator') || c.includes('allocator')) return 'curator';
+  if (c.includes('stable')) return 'stable';
+  if (c.includes('rwa')) return 'rwa';
+  if (c.includes('insurance')) return 'insurance';
+  return 'other';
 }
 
 /** The one action for a category, in words a farmer can follow. */
 function actionFor(p: SnapshotProtocol, capital: number, chain: string): string {
-  const c = (p.category ?? '').toLowerCase();
   const name = p.name;
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Supply $${capital} of USDC to ${name} on ${chain} and keep the position open.`;
-  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return `Provide $${capital} of liquidity to ${name}'s main pool on ${chain} and keep the position open.`;
-  if (c.includes('bridge')) return `Bridge $${capital} of USDC to ${chain} through ${name} and use the bridged funds in its app.`;
-  if (c.includes('staking') || c.includes('restak')) return `Stake $${capital} of the chain's staking asset through ${name} and keep the receipt.`;
-  if (c.includes('perpetual') || c.includes('derivative')) return `Deposit $${capital} of USDC as margin on ${name} and open one small hedge.`;
-  if (c.includes('prediction')) return `Fund $${capital} and place one market position on ${name}.`;
-  if (c.includes('curator') || c.includes('allocator')) return `Deposit $${capital} into a ${name} vault on ${chain} and keep the shares.`;
-  if (c.includes('stable')) return `Mint or deposit $${capital} of the stable asset through ${name} on ${chain}.`;
-  if (c.includes('rwa')) return `Mint $${capital} of the protocol's yield asset on ${chain} and hold it.`;
-  if (c.includes('insurance')) return `Buy $${capital} of cover from ${name} on ${chain} and keep the policy.`;
-  return `Deposit $${capital} of USDC into ${name} on ${chain} and keep the position open.`;
+  switch (categoryKind(p)) {
+    case 'lending': return `Supply $${capital} of USDC to ${name} on ${chain} and keep the position open.`;
+    case 'dex': return `Provide $${capital} of liquidity to ${name}'s main pool on ${chain} and keep the position open.`;
+    case 'bridge': return `Bridge $${capital} of USDC to ${chain} through ${name} and use the bridged funds in its app.`;
+    case 'staking': return `Stake $${capital} of the chain's staking asset through ${name} and keep the receipt.`;
+    case 'perps': return `Deposit $${capital} of USDC as margin on ${name} and open one small hedge.`;
+    case 'prediction': return `Fund $${capital} and place one market position on ${name}.`;
+    case 'curator': return `Deposit $${capital} into a ${name} vault on ${chain} and keep the shares.`;
+    case 'stable': return `Mint or deposit $${capital} of the stable asset through ${name} on ${chain}.`;
+    case 'rwa': return `Mint $${capital} of the protocol's yield asset on ${chain} and hold it.`;
+    case 'insurance': return `Buy $${capital} of cover from ${name} on ${chain} and keep the policy.`;
+    default: return `Deposit $${capital} of USDC into ${name} on ${chain} and keep the position open.`;
+  }
+}
+
+/** The page to check for points or rewards: the protocol's own page for the thing it actually does. */
+function pointsCheckFor(p: SnapshotProtocol): string {
+  const name = p.name;
+  switch (categoryKind(p)) {
+    case 'curator': return `Check ${name}'s vault allocation and rewards page and note exactly which vault actions it counts, if any.`;
+    case 'perps': return `Check ${name}'s trading rewards and fees page and note exactly which trades it counts, if any.`;
+    case 'staking': return `Check ${name}'s staking rewards and unstaking page and note exactly which stakes it counts, if any.`;
+    case 'bridge': return `Check ${name}'s bridging rewards page and note exactly which transfers it counts, if any.`;
+    case 'dex': return `Check ${name}'s liquidity rewards page and note exactly which pools it counts, if any.`;
+    default: return `Check ${name}'s own points, rewards or docs page and note exactly which actions it counts, if any.`;
+  }
+}
+
+/** The weekly action: one small qualifying action, in the protocol's own terms, not a generic list. */
+function weeklyActionFor(p: SnapshotProtocol): string {
+  const name = p.name;
+  switch (categoryKind(p)) {
+    case 'lending': return `Each week, supply a little more to ${name}, or repay and reborrow a small amount.`;
+    case 'dex': return `Each week, add a small amount of liquidity, or make one swap, on ${name}.`;
+    case 'bridge': return `Each week, bridge a small amount back, or use the bridged funds in ${name}'s app.`;
+    case 'staking': return `Each week, restake the rewards, or add a small stake, through ${name}.`;
+    case 'perps': return `Each week, open and close one small hedge on ${name}.`;
+    case 'prediction': return `Each week, place one small market position on ${name}.`;
+    case 'curator': return `Each week, check the vault's allocation and top up or rebalance a small amount in ${name}.`;
+    case 'stable': return `Each week, hold the position and check the peg on ${name}.`;
+    case 'rwa': return `Each week, hold the position and check the yield page on ${name}.`;
+    case 'insurance': return `Each week, keep the policy and check its renewal terms on ${name}.`;
+    default: return `Each week, make one qualifying action in ${name}'s own app.`;
+  }
+}
+
+/** The risk clause for a category, added to the safety step: what can actually go wrong here. */
+function riskNoteFor(p: SnapshotProtocol): string {
+  switch (categoryKind(p)) {
+    case 'perps': return ` Leverage can liquidate a position fast, so keep the hedge small.`;
+    case 'lending': return ` Watch borrow utilisation and liquidation prices before adding to a borrow.`;
+    case 'dex': return ` Liquidity can lose value to impermanent loss, so keep the position small.`;
+    case 'bridge': return ` Check the destination chain and finality before bridging.`;
+    case 'staking': return ` Unstaking can take days, so do not stake funds you may need soon.`;
+    default: return ``;
+  }
 }
 
 /**
  * A protocol's farm plan: seven steps, each an action with a cost and a time.
- * The plan is derived from the protocol's own record (category, chains, TVL,
- * age), never from a hand-written list of names. No step promises a token or
+ * Every step is derived from the protocol's own record (category, chains,
+ * TVL, age), never from a hand-written list of names: the action, the weekly
+ * action, the points page, the risk note, the chain and the gas all follow
+ * from what the protocol is and where it runs. No step promises a token or
  * an airdrop: the protocol records no token, and a farm plan is a way to use
  * it, not a guarantee of a launch.
  */
 export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
-  const chain = chainOf(p);
+  const best = cheapestChain(p);
   const capital = capitalFor(p);
   const hold = holdDaysFor(age);
-  const action = actionFor(p, capital, chain);
+  const gas = GAS_USD[best.tier];
+  const action = actionFor(p, capital, best.chain);
+  const multiChain = p.chains.length > 1 ? ` ${best.chain} is the cheapest of its ${p.chains.length} chains for gas.` : ``;
   return [
     {
       text: `Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.`,
@@ -552,18 +651,18 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       time: '5 minutes',
     },
     {
-      text: action,
-      cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`,
+      text: `${action}${multiChain}`,
+      cost: `$${capital} of capital and about $${gas.setup} of gas (estimate on ${best.chain})`,
       time: '15 minutes to set up',
     },
     {
-      text: `Check ${p.name}'s own points, rewards or docs page and note exactly which actions it counts, if any.`,
+      text: pointsCheckFor(p),
       cost: 'no fee to check',
       time: '10 minutes',
     },
     {
-      text: `Make one qualifying action each week, such as a deposit, a borrow, a swap or a vote.`,
-      cost: 'about $2 of gas a week',
+      text: weeklyActionFor(p),
+      cost: `about $${gas.weekly} of gas a week (estimate)`,
       time: '10 minutes a week',
     },
     {
@@ -572,7 +671,7 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       time: `${hold} days`,
     },
     {
-      text: `Never pay to claim, never sign a blind transaction, and never share a seed phrase; a real claim costs only gas.`,
+      text: `Never pay to claim, never sign a blind transaction, and never share a seed phrase; a real claim costs only gas.${riskNoteFor(p)}`,
       cost: 'no fee to check, and never pay to claim',
       time: '5 minutes',
     },

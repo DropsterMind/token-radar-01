@@ -69,9 +69,25 @@
   }
 
   // The farm plan is the same derivation main.ts writes to board.json:
-  // category, chains, TVL and age decide the action, the capital, the hold
-  // and every cost and time. No name is special-cased.
-  function chainOf(p) { return p.chains && p.chains.length > 0 ? p.chains[0] : 'its main chain'; }
+  // category, chains, TVL and age decide the action, the weekly action, the
+  // points page, the risk note, the cheapest chain and every cost and time.
+  // No name is special-cased. This mirror must stay byte-identical to the
+  // model's farmSteps: the detail drawer rebuilds the plan from data.js,
+  // and a mismatch would show a different plan than board.json carries.
+  var MID_TIER_CHAINS = ['Arbitrum', 'Optimism', 'Base', 'Polygon', 'zkSync Era', 'Linea', 'Scroll', 'Blast', 'Ink', 'Mode', 'Fraxtal', 'Mantle', 'Unichain', 'Sonic', 'Berachain', 'Hyperliquid L1', 'Monad', 'Plasma'];
+  var GAS_USD = { high: { setup: 15, weekly: 10, claim: 5 }, mid: { setup: 4, weekly: 2, claim: 2 }, low: { setup: 1, weekly: 1, claim: 1 } };
+  function chainTier(chain) {
+    if (chain === 'Ethereum' || chain === 'Bitcoin') return 'high';
+    if (MID_TIER_CHAINS.indexOf(chain) >= 0) return 'mid';
+    return 'low';
+  }
+  function cheapestChain(p) {
+    if (!p.chains || p.chains.length === 0) return { chain: 'its main chain', tier: 'mid' };
+    var rank = { high: 2, mid: 1, low: 0 };
+    var best = p.chains[0];
+    p.chains.forEach(function (chain) { if (rank[chainTier(chain)] < rank[chainTier(best)]) best = chain; });
+    return { chain: best, tier: chainTier(best) };
+  }
   function capitalFor(p) {
     if (p.tvl_usd >= 5e9) return 250;
     if (p.tvl_usd >= 1e9) return 150;
@@ -84,20 +100,72 @@
     if (age < 365) return 45;
     return 30;
   }
-  function actionFor(p, capital, chain) {
+  function categoryKind(p) {
     var c = (p.category || '').toLowerCase();
+    if (c.indexOf('lend') >= 0 || c.indexOf('cdp') >= 0 || c.indexOf('collateral') >= 0) return 'lending';
+    if (c.indexOf('dex') >= 0 || c.indexOf('yield') >= 0 || c.indexOf('leveraged farm') >= 0) return 'dex';
+    if (c.indexOf('bridge') >= 0) return 'bridge';
+    if (c.indexOf('staking') >= 0 || c.indexOf('restak') >= 0) return 'staking';
+    if (c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0) return 'perps';
+    if (c.indexOf('prediction') >= 0) return 'prediction';
+    if (c.indexOf('curator') >= 0 || c.indexOf('allocator') >= 0) return 'curator';
+    if (c.indexOf('stable') >= 0) return 'stable';
+    if (c.indexOf('rwa') >= 0) return 'rwa';
+    if (c.indexOf('insurance') >= 0) return 'insurance';
+    return 'other';
+  }
+  function actionFor(p, capital, chain) {
     var name = p.name;
-    if (c.indexOf('lend') >= 0 || c.indexOf('cdp') >= 0 || c.indexOf('collateral') >= 0) return 'Supply $' + capital + ' of USDC to ' + name + ' on ' + chain + ' and keep the position open.';
-    if (c.indexOf('dex') >= 0 || c.indexOf('yield') >= 0 || c.indexOf('leveraged farm') >= 0) return 'Provide $' + capital + ' of liquidity to ' + name + "'s main pool on " + chain + ' and keep the position open.';
-    if (c.indexOf('bridge') >= 0) return 'Bridge $' + capital + ' of USDC to ' + chain + ' through ' + name + ' and use the bridged funds in its app.';
-    if (c.indexOf('staking') >= 0 || c.indexOf('restak') >= 0) return "Stake $" + capital + " of the chain's staking asset through " + name + ' and keep the receipt.';
-    if (c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0) return 'Deposit $' + capital + ' of USDC as margin on ' + name + ' and open one small hedge.';
-    if (c.indexOf('prediction') >= 0) return 'Fund $' + capital + ' and place one market position on ' + name + '.';
-    if (c.indexOf('curator') >= 0 || c.indexOf('allocator') >= 0) return 'Deposit $' + capital + ' into a ' + name + ' vault on ' + chain + ' and keep the shares.';
-    if (c.indexOf('stable') >= 0) return 'Mint or deposit $' + capital + ' of the stable asset through ' + name + ' on ' + chain + '.';
-    if (c.indexOf('rwa') >= 0) return "Mint $" + capital + " of the protocol's yield asset on " + chain + ' and hold it.';
-    if (c.indexOf('insurance') >= 0) return 'Buy $' + capital + ' of cover from ' + name + ' on ' + chain + ' and keep the policy.';
-    return 'Deposit $' + capital + ' of USDC into ' + name + ' on ' + chain + ' and keep the position open.';
+    switch (categoryKind(p)) {
+      case 'lending': return 'Supply $' + capital + ' of USDC to ' + name + ' on ' + chain + ' and keep the position open.';
+      case 'dex': return 'Provide $' + capital + ' of liquidity to ' + name + "'s main pool on " + chain + ' and keep the position open.';
+      case 'bridge': return 'Bridge $' + capital + ' of USDC to ' + chain + ' through ' + name + ' and use the bridged funds in its app.';
+      case 'staking': return "Stake $" + capital + " of the chain's staking asset through " + name + ' and keep the receipt.';
+      case 'perps': return 'Deposit $' + capital + ' of USDC as margin on ' + name + ' and open one small hedge.';
+      case 'prediction': return 'Fund $' + capital + ' and place one market position on ' + name + '.';
+      case 'curator': return 'Deposit $' + capital + ' into a ' + name + ' vault on ' + chain + ' and keep the shares.';
+      case 'stable': return 'Mint or deposit $' + capital + ' of the stable asset through ' + name + ' on ' + chain + '.';
+      case 'rwa': return "Mint $" + capital + " of the protocol's yield asset on " + chain + ' and hold it.';
+      case 'insurance': return 'Buy $' + capital + ' of cover from ' + name + ' on ' + chain + ' and keep the policy.';
+      default: return 'Deposit $' + capital + ' of USDC into ' + name + ' on ' + chain + ' and keep the position open.';
+    }
+  }
+  function pointsCheckFor(p) {
+    var name = p.name;
+    switch (categoryKind(p)) {
+      case 'curator': return "Check " + name + "'s vault allocation and rewards page and note exactly which vault actions it counts, if any.";
+      case 'perps': return "Check " + name + "'s trading rewards and fees page and note exactly which trades it counts, if any.";
+      case 'staking': return "Check " + name + "'s staking rewards and unstaking page and note exactly which stakes it counts, if any.";
+      case 'bridge': return "Check " + name + "'s bridging rewards page and note exactly which transfers it counts, if any.";
+      case 'dex': return "Check " + name + "'s liquidity rewards page and note exactly which pools it counts, if any.";
+      default: return "Check " + name + "'s own points, rewards or docs page and note exactly which actions it counts, if any.";
+    }
+  }
+  function weeklyActionFor(p) {
+    var name = p.name;
+    switch (categoryKind(p)) {
+      case 'lending': return 'Each week, supply a little more to ' + name + ', or repay and reborrow a small amount.';
+      case 'dex': return 'Each week, add a small amount of liquidity, or make one swap, on ' + name + '.';
+      case 'bridge': return 'Each week, bridge a small amount back, or use the bridged funds in ' + name + "'s app.";
+      case 'staking': return 'Each week, restake the rewards, or add a small stake, through ' + name + '.';
+      case 'perps': return 'Each week, open and close one small hedge on ' + name + '.';
+      case 'prediction': return 'Each week, place one small market position on ' + name + '.';
+      case 'curator': return 'Each week, check the vault\'s allocation and top up or rebalance a small amount in ' + name + '.';
+      case 'stable': return 'Each week, hold the position and check the peg on ' + name + '.';
+      case 'rwa': return 'Each week, hold the position and check the yield page on ' + name + '.';
+      case 'insurance': return 'Each week, keep the policy and check its renewal terms on ' + name + '.';
+      default: return 'Each week, make one qualifying action in ' + name + "'s own app.";
+    }
+  }
+  function riskNoteFor(p) {
+    switch (categoryKind(p)) {
+      case 'perps': return ' Leverage can liquidate a position fast, so keep the hedge small.';
+      case 'lending': return ' Watch borrow utilisation and liquidation prices before adding to a borrow.';
+      case 'dex': return ' Liquidity can lose value to impermanent loss, so keep the position small.';
+      case 'bridge': return ' Check the destination chain and finality before bridging.';
+      case 'staking': return ' Unstaking can take days, so do not stake funds you may need soon.';
+      default: return '';
+    }
   }
   function stepText(step) {
     var s = step.text + ' Cost: ' + step.cost + '. Time: ' + step.time + '.';
@@ -106,16 +174,18 @@
     return s;
   }
   function farmSteps(p) {
-    var chain = chainOf(p);
+    var best = cheapestChain(p);
     var capital = capitalFor(p);
     var hold = holdDaysFor(p.age_days);
+    var gas = GAS_USD[best.tier];
+    var multiChain = p.chains && p.chains.length > 1 ? ' ' + best.chain + ' is the cheapest of its ' + p.chains.length + ' chains for gas.' : '';
     return [
       { text: 'Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.', cost: 'under $3 of gas for the first transaction', time: '5 minutes' },
-      { text: actionFor(p, capital, chain), cost: '$' + capital + ' of capital and about $' + (capital >= 150 ? 8 : 4) + ' of gas', time: '15 minutes to set up' },
-      { text: "Check " + p.name + "'s own points, rewards or docs page and note exactly which actions it counts, if any.", cost: 'no fee to check', time: '10 minutes' },
-      { text: 'Make one qualifying action each week, such as a deposit, a borrow, a swap or a vote.', cost: 'about $2 of gas a week', time: '10 minutes a week' },
+      { text: actionFor(p, capital, best.chain) + multiChain, cost: '$' + capital + ' of capital and about $' + gas.setup + ' of gas (estimate on ' + best.chain + ')', time: '15 minutes to set up' },
+      { text: pointsCheckFor(p), cost: 'no fee to check', time: '10 minutes' },
+      { text: weeklyActionFor(p), cost: 'about $' + gas.weekly + ' of gas a week (estimate)', time: '10 minutes a week' },
       { text: 'Hold the position for at least ' + hold + ' days so the activity is counted in more than one snapshot.', cost: 'the $' + capital + ' stays in the position', time: hold + ' days' },
-      { text: 'Never pay to claim, never sign a blind transaction, and never share a seed phrase; a real claim costs only gas.', cost: 'no fee to check, and never pay to claim', time: '5 minutes' },
+      { text: 'Never pay to claim, never sign a blind transaction, and never share a seed phrase; a real claim costs only gas.' + riskNoteFor(p), cost: 'no fee to check, and never pay to claim', time: '5 minutes' },
       { text: "Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes, then log the wallet, dates and every transaction.", cost: 'nothing but the log', time: '10 minutes' }
     ].map(stepText);
   }
@@ -543,7 +613,7 @@
     ) : null;
     var farmSection = el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm plan' }),
-      el('p', { class: 'sub', text: 'Seven steps, each with its cost and time. The totals above are the steps added up — setup gas, $2 of gas a week for the hold, and $3 to claim — so the plan states its whole price before it starts.' }),
+      el('p', { class: 'sub', text: 'Seven steps, each with its cost and time. The totals above are the steps added up — setup gas, weekly gas for the hold, and claim gas, all on the cheapest of the protocol\'s own chains — so the plan states its whole price before it starts.' }),
       el('ol', { class: 'steps' }, steps.map(function (s) {
         var at = s.indexOf(' Cost: ');
         var action = at >= 0 ? s.slice(0, at) : s;
