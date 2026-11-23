@@ -175,6 +175,14 @@ export interface PeerEntry {
   n: number;
 }
 
+/** One category's share of the board: how many rows it holds, how many of them are watchlist rows, and their median TVL. */
+export interface CategoryStat {
+  category: string;
+  rows: number;
+  watchlist_rows: number;
+  median_tvl_usd: number;
+}
+
 /** Everything the dashboard needs: the board, the live set, the peer table, the model. */
 export interface RadarData {
   as_of: string;
@@ -190,6 +198,7 @@ export interface RadarData {
   live: LiveRow[];
   peers: PeerEntry[];
   peer_global: number;
+  category_stats: CategoryStat[];
 }
 
 /** The snapshot is not one this model can score. */
@@ -539,6 +548,33 @@ export function radarRow(row: BoardRow): RadarRow {
   };
 }
 
+/** Per-category board coverage: rows, watchlist rows and median TVL, largest category first. */
+export function categoryStats(board: BoardRow[], snapshot: Snapshot): CategoryStat[] {
+  const watchlist = new Set(snapshot.watchlist);
+  const grouped = new Map<string, { tvls: number[]; watchlistRows: number }>();
+  for (const row of board) {
+    const key = row.category ?? 'Other';
+    const bucket = grouped.get(key);
+    if (bucket === undefined) grouped.set(key, { tvls: [row.tvl_usd], watchlistRows: watchlist.has(row.slug) ? 1 : 0 });
+    else {
+      bucket.tvls.push(row.tvl_usd);
+      if (watchlist.has(row.slug)) bucket.watchlistRows += 1;
+    }
+  }
+  const stats: CategoryStat[] = [];
+  for (const [category, bucket] of grouped) {
+    const sorted = [...bucket.tvls].sort((a, b) => a - b);
+    stats.push({
+      category,
+      rows: bucket.tvls.length,
+      watchlist_rows: bucket.watchlistRows,
+      median_tvl_usd: medianOf(sorted),
+    });
+  }
+  stats.sort((a, b) => b.rows - a.rows || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0));
+  return stats;
+}
+
 /** Everything the dashboard renders, from the snapshot. */
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
   const board = buildBoard(snapshot, model);
@@ -559,6 +595,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     live,
     peers: calibration.entries,
     peer_global: calibration.global,
+    category_stats: categoryStats(board, snapshot),
   };
   return { board, radar };
 }

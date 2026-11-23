@@ -341,6 +341,36 @@
     );
   }
 
+  // Coverage by category: how many board rows each category holds, how many
+  // of them are watchlist rows, and their median TVL. It answers at a glance
+  // whether the board is one category's story or the whole pre-token field.
+  function categoryPanel() {
+    var stats = DATA.category_stats || [];
+    var rows = stats.map(function (s) {
+      return el('tr', null,
+        el('td', null, el('b', { text: s.category })),
+        el('td', { class: 'num', text: String(s.rows) }),
+        el('td', { class: 'num', text: String(s.watchlist_rows) }),
+        el('td', { class: 'num', text: fmtUsd(s.median_tvl_usd) })
+      );
+    });
+    return el('section', { class: 'panel model' },
+      el('h2', { text: 'Coverage by category' }),
+      el('p', { class: 'sub', text: 'Every category on the board, largest first. Watchlist rows are the protocols at or above the $' + Math.round(DATA.floor_usd / 1e6) + 'M floor with no token on record; the rest are the early rows below it.' }),
+      el('div', { class: 'table-wrap' },
+        el('table', null,
+          el('thead', null, el('tr', null,
+            el('th', { scope: 'col', text: 'Category' }),
+            el('th', { scope: 'col', text: 'Board rows' }),
+            el('th', { scope: 'col', text: 'Watchlist rows' }),
+            el('th', { scope: 'col', text: 'Median TVL' })
+          )),
+          el('tbody', null, rows)
+        )
+      )
+    );
+  }
+
   function modelPanel() {
     var m = DATA.model;
     return el('section', { class: 'panel model' },
@@ -415,6 +445,7 @@
     if (state.tab === 'pre-token') {
       shell.appendChild(modelPanel());
       shell.appendChild(peerPanel());
+      shell.appendChild(categoryPanel());
     }
     app.appendChild(shell);
     app.setAttribute('aria-busy', 'false');
