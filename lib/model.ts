@@ -199,6 +199,20 @@ export interface FitDiagnostics {
   within_range_pct: number;
 }
 
+/** One category's fit bias: the median log residual of its live-token protocols against the fitted line. A positive bias means the line under-predicts the category; a negative one means it over-predicts. */
+export interface FitBias {
+  category: string;
+  n: number;
+  median_residual: number;
+}
+
+/** One sensitivity setting: how the board's head moves when the launch-readiness adjustments change. */
+export interface SensitivityResult {
+  label: string;
+  overlap_top10: number;
+  top5: string[];
+}
+
 /** Everything the dashboard needs: the board, the live set, the fit, the model. */
 export interface RadarData {
   as_of: string;
@@ -215,6 +229,8 @@ export interface RadarData {
   category_stats: CategoryStat[];
   fit: LogLogFit;
   fit_diagnostics: FitDiagnostics;
+  fit_bias: FitBias[];
+  sensitivity: SensitivityResult[];
   range_factor: number;
   held_out_log_error: number;
 }
@@ -611,6 +627,61 @@ export function categoryStats(board: BoardRow[], snapshot: Snapshot): CategorySt
   return stats;
 }
 
+/**
+ * The fit's bias by category: the median log residual of each category's
+ * live-token protocols (categories with at least 5 live peers). The bias is
+ * shown, not corrected: adding category offsets made the held-out error
+ * worse (1.33 against 1.26 log units), so the board does not adjust for it.
+ */
+export function fitBias(snapshot: Snapshot, fit: LogLogFit): FitBias[] {
+  const grouped = new Map<string, number[]>();
+  for (const p of calibrationUniverse(snapshot)) {
+    const residual = Math.log(p.mcap_usd!) - (fit.intercept + fit.slope * Math.log(p.tvl_usd));
+    const bucket = grouped.get(p.category!);
+    if (bucket === undefined) grouped.set(p.category!, [residual]);
+    else bucket.push(residual);
+  }
+  const bias: FitBias[] = [];
+  for (const [category, residuals] of grouped) {
+    if (residuals.length < 5) continue;
+    bias.push({
+      category,
+      n: residuals.length,
+      median_residual: Math.round(medianOf([...residuals].sort((a, b) => a - b)) * 100) / 100,
+    });
+  }
+  bias.sort((a, b) => Math.abs(b.median_residual) - Math.abs(a.median_residual));
+  return bias;
+}
+
+/**
+ * Sensitivity of the board's head to the launch-readiness adjustments: the
+ * base board's top 10 against the top 10 of four boards scored with the
+ * adjustments turned off, doubled, or removed. The overlap says whether the
+ * weights do the ranking's work — on this snapshot they do not: the top 5
+ * never move, and 8 to 10 of the top 10 survive every setting.
+ */
+export function sensitivity(snapshot: Snapshot, model: ModelConstants = MODEL): SensitivityResult[] {
+  const base = buildBoard(snapshot, model);
+  const baseTop10 = new Set(base.slice(0, 10).map((r) => r.slug));
+  const settings: { label: string; model: ModelConstants }[] = [
+    { label: 'Chosen (growth 0.4, maturity on)', model },
+    { label: 'No growth (weight 0)', model: { ...model, growth_weight: 0 } },
+    { label: 'Strong growth (weight 0.8)', model: { ...model, growth_weight: 0.8 } },
+    { label: 'No maturity', model: { ...model, maturity_floor: 1, maturity_range: 0 } },
+    { label: 'No adjustments at all', model: { ...model, growth_weight: 0, maturity_floor: 1, maturity_range: 0 } },
+  ];
+  return settings.map((s) => {
+    const board = buildBoard(snapshot, s.model);
+    const top10 = board.slice(0, 10);
+    return {
+      label: s.label,
+      overlap_top10: top10.filter((r) => baseTop10.has(r.slug)).length,
+      top5: top10.slice(0, 5).map((r) => r.name),
+    };
+  });
+}
+
 /** Everything the dashboard renders, from the snapshot. */
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
   const board = buildBoard(snapshot, model);
@@ -635,6 +706,8 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     category_stats: categoryStats(board, snapshot),
     fit,
     fit_diagnostics: diagnostics,
+    fit_bias: fitBias(snapshot, fit),
+    sensitivity: sensitivity(snapshot, model),
     range_factor: rangeFactor,
     held_out_log_error: Math.round(heldOut * 1000) / 1000,
   };

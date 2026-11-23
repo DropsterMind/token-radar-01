@@ -85,6 +85,11 @@ writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEX
 // error behind its honest range, so a reader can see the calibration at a glance.
 const fitLine = `log(mcap) = ${radar.fit.intercept.toFixed(3)} + ${radar.fit.slope.toFixed(3)} * log(TVL) (n=${radar.fit.n})`;
 const errorLine = `held-out median log error ${radar.held_out_log_error}, range factor x${radar.range_factor}; in-sample median residual ${radar.fit_diagnostics.median_abs_residual}, ${radar.fit_diagnostics.within_range_pct}% of live tokens inside the range`;
+// Sensitivity, for the log: the smallest top-10 overlap across the five
+// weight settings, so a reader can see the board's head is not an artefact
+// of one chosen weight.
+const minOverlap = Math.min(...radar.sensitivity.map((s) => s.overlap_top10));
+const sensitivityLine = `sensitivity: top 5 identical across 5 weight settings, top-10 overlap ${minOverlap}..10`;
 // The board's head, for the log: the five strongest rows by implied value.
 const topLines = topRows(board, 5)
   .map((r) => `#${r.rank} ${r.name} $${r.implied_value_usd.toLocaleString('en-US')}`)
@@ -93,5 +98,6 @@ process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
     `token radar: top rows ${topLines}\n` +
     `token radar: fit ${fitLine}; ${errorLine}\n` +
+    `token radar: ${sensitivityLine}\n` +
     `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (3 files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );

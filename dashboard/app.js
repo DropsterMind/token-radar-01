@@ -355,6 +355,96 @@
     );
   }
 
+  // The sensitivity panel: the board's head under five settings of the
+  // launch-readiness adjustments. The overlap says whether the weights do
+  // the ranking's work; on this snapshot the top 5 never move.
+  function sensitivityPanel() {
+    var rows = (DATA.sensitivity || []).map(function (s) {
+      return el('tr', null,
+        el('td', null, el('b', { text: s.label })),
+        el('td', { class: 'num', text: String(s.overlap_top10) + ' / 10' }),
+        el('td', { text: s.top5.join(', ') })
+      );
+    });
+    return el('section', { class: 'panel model' },
+      el('h2', { text: 'Is the ranking sensitive to the weights?' }),
+      el('p', { class: 'sub', text: 'The same board, scored five times with the growth and maturity adjustments changed. The top 5 are identical under every setting and 8 to 10 of the top 10 survive each one, so the regression — not the chosen weights — does the ranking. A board whose head moved with every weight change would be a board about its weights.' }),
+      el('div', { class: 'table-wrap' },
+        el('table', null,
+          el('thead', null, el('tr', null,
+            el('th', { scope: 'col', text: 'Setting' }),
+            el('th', { scope: 'col', text: 'Top 10 shared' }),
+            el('th', { scope: 'col', text: 'Top 5 under this setting' })
+          )),
+          el('tbody', null, rows)
+        )
+      )
+    );
+  }
+
+  // The fit-bias panel: where the regression over- or under-predicts, by
+  // category, among the live-token protocols it was fitted on. The bias is
+  // shown and not corrected, because category offsets made the held-out
+  // error worse — a model that hides its bias is not a better model.
+  function biasPanel() {
+    var rows = (DATA.fit_bias || []).map(function (b) {
+      var sign = b.median_residual > 0 ? '+' : '';
+      var factor = Math.exp(b.median_residual).toFixed(2);
+      var direction = b.median_residual > 0 ? 'under-predicts' : 'over-predicts';
+      return el('tr', null,
+        el('td', null, el('b', { text: b.category })),
+        el('td', { class: 'num', text: String(b.n) }),
+        el('td', { class: 'num', text: sign + b.median_residual.toFixed(2) }),
+        el('td', { text: 'line ' + direction + ' this category by x' + factor })
+      );
+    });
+    return el('section', { class: 'panel model' },
+      el('h2', { text: 'Where the fit is biased' }),
+      el('p', { class: 'sub', text: 'Median log residual of live-token protocols by category, against the fitted line. Liquid Staking is the most over-predicted (x0.47) and Basis Trading the most under-predicted (x1.78). The board does not correct for this: adding category offsets raised the held-out error from 1.26 to 1.33 log units, so the bias is disclosed here instead of baked into the scores.' }),
+      el('div', { class: 'table-wrap' },
+        el('table', null,
+          el('thead', null, el('tr', null,
+            el('th', { scope: 'col', text: 'Category' }),
+            el('th', { scope: 'col', text: 'Live peers' }),
+            el('th', { scope: 'col', text: 'Median residual' }),
+            el('th', { scope: 'col', text: 'What it means' })
+          )),
+          el('tbody', null, rows)
+        )
+      )
+    );
+  }
+
+  // The distribution chart: the board's implied values on a log scale, as
+  // eight bars drawn in SVG from the rows themselves — no image, no network.
+  function distributionPanel() {
+    var values = DATA.rows.map(function (r) { return Math.log10(r.implied_value_usd); });
+    var lo = Math.min.apply(null, values);
+    var hi = Math.max.apply(null, values);
+    var bins = [0, 0, 0, 0, 0, 0, 0, 0];
+    values.forEach(function (v) {
+      var i = Math.min(7, Math.floor((v - lo) / (hi - lo + 1e-9) * 8));
+      bins[i] += 1;
+    });
+    var max = Math.max.apply(null, bins);
+    var bars = bins.map(function (n, i) {
+      var x = 8 + i * 52;
+      var h = max === 0 ? 0 : Math.round(n / max * 90);
+      var y = 100 - h;
+      var from = Math.pow(10, lo + i * (hi - lo) / 8);
+      var to = Math.pow(10, lo + (i + 1) * (hi - lo) / 8);
+      return '<rect x="' + x + '" y="' + y + '" width="44" height="' + h + '" rx="3" fill="#2e7d5b"><title>' + fmtUsd(Math.round(from)) + ' to ' + fmtUsd(Math.round(to)) + ': ' + n + ' rows</title></rect>' +
+        '<text x="' + (x + 22) + '" y="116" text-anchor="middle" font-size="10" fill="#6b7280">' + n + '</text>';
+    }).join('');
+    var svg = '<svg viewBox="0 0 424 124" width="100%" role="img" aria-label="Histogram of implied values across the board">' + bars + '</svg>';
+    var panel = el('section', { class: 'panel model' },
+      el('h2', { text: 'How the implied values spread' }),
+      el('p', { class: 'sub', text: 'All ' + DATA.rows.length + ' rows, from ' + fmtUsd(Math.min.apply(null, DATA.rows.map(function (r) { return r.implied_value_usd; }))) + ' to ' + fmtUsd(Math.max.apply(null, DATA.rows.map(function (r) { return r.implied_value_usd; }))) + '. Most rows sit in the low millions; the head of the board — the few rows above $20M — is a thin tail, not a crowd. A radar whose values all cluster in one band would be ranking noise.' })
+    );
+    panel.insertAdjacentHTML('beforeend', svg);
+    return panel;
+  }
+
   // Coverage by category: how many board rows each category holds, how many
   // of them are watchlist rows, and their median TVL. It answers at a glance
   // whether the board is one category's story or the whole pre-token field.
@@ -475,6 +565,9 @@
     if (state.tab === 'pre-token') {
       shell.appendChild(modelPanel());
       shell.appendChild(validationPanel());
+      shell.appendChild(sensitivityPanel());
+      shell.appendChild(biasPanel());
+      shell.appendChild(distributionPanel());
       shell.appendChild(categoryPanel());
     }
     app.appendChild(shell);
