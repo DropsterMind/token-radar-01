@@ -341,6 +341,7 @@
     return el('section', { class: 'panel model' },
       el('h2', { text: 'How the model was chosen' }),
       el('p', { class: 'sub', text: 'Each candidate predicts the market cap of live-token protocols it was not fitted on: five folds, split by slug hash, median absolute log error. Category offsets overfit, 7-day growth adds nothing (its correlation with log(mcap/TVL) is -0.09; age 0.00; chain count 0.00), and a flat peer multiple misses that mcap/TVL falls as TVL grows (correlation -0.46). The regression wins, so the board uses it — and its own held-out error of ' + DATA.held_out_log_error + ' log units is the honest range of x' + DATA.range_factor + ' every row shows.' }),
+      el('p', { class: 'sub', text: 'In-sample, the fitted line leaves a median residual of ' + DATA.fit_diagnostics.median_abs_residual + ' log units, and ' + DATA.fit_diagnostics.within_range_pct + '% of the live-token protocols fall inside the x' + DATA.range_factor + ' range around it. In-sample is flattering by design — the held-out error above is the honest one — and the two are shown side by side so the gap is visible.' }),
       el('div', { class: 'table-wrap' },
         el('table', null,
           el('thead', null, el('tr', null,

@@ -193,6 +193,12 @@ export interface LogLogFit {
   n: number;
 }
 
+/** How well the fitted line describes the live tokens it was fitted on: the median absolute log residual, and the share of live tokens whose market cap falls inside the honest range around the fit. */
+export interface FitDiagnostics {
+  median_abs_residual: number;
+  within_range_pct: number;
+}
+
 /** Everything the dashboard needs: the board, the live set, the fit, the model. */
 export interface RadarData {
   as_of: string;
@@ -208,6 +214,7 @@ export interface RadarData {
   live: LiveRow[];
   category_stats: CategoryStat[];
   fit: LogLogFit;
+  fit_diagnostics: FitDiagnostics;
   range_factor: number;
   held_out_log_error: number;
 }
@@ -270,6 +277,26 @@ function fitLine(protocols: SnapshotProtocol[]): LogLogFit {
 /** The log-log fit over the snapshot's live-token protocols, computed fresh on every run. */
 export function fitLogLog(snapshot: Snapshot): LogLogFit {
   return fitLine(calibrationUniverse(snapshot));
+}
+
+/**
+ * The fit's in-sample diagnostics: the median absolute log residual of the
+ * live tokens, and how many of them sit inside the honest range around the
+ * fitted line. In-sample by design — the held-out error is the honest
+ * measure, and this one is only shown next to it so the two can be compared.
+ */
+export function fitDiagnostics(snapshot: Snapshot, fit: LogLogFit, rangeFactor: number): FitDiagnostics {
+  const live = calibrationUniverse(snapshot);
+  const residuals = live.map((p) => Math.abs(Math.log(p.mcap_usd!) - (fit.intercept + fit.slope * Math.log(p.tvl_usd))));
+  const within = live.filter((p) => {
+    const predicted = fit.intercept + fit.slope * Math.log(p.tvl_usd);
+    const actual = Math.log(p.mcap_usd!);
+    return Math.abs(actual - predicted) <= Math.log(rangeFactor);
+  }).length;
+  return {
+    median_abs_residual: Math.round(medianOf([...residuals].sort((a, b) => a - b)) * 1000) / 1000,
+    within_range_pct: Math.round((within / Math.max(1, live.length)) * 100),
+  };
 }
 
 /** Which of the five held-out folds a slug falls in: the first 8 hex digits of its SHA-256, mod 5 — the same split the validation script (work/validate_v3.py) uses, so the runtime measurement and the documented one agree. */
@@ -591,6 +618,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   const fit = fitLogLog(snapshot);
   const heldOut = heldOutLogError(snapshot);
   const rangeFactor = Math.round(Math.exp(heldOut) * 10) / 10;
+  const diagnostics = fitDiagnostics(snapshot, fit, rangeFactor);
   const early = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
   const radar: RadarData = {
     as_of: snapshot.as_of,
@@ -606,6 +634,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     live,
     category_stats: categoryStats(board, snapshot),
     fit,
+    fit_diagnostics: diagnostics,
     range_factor: rangeFactor,
     held_out_log_error: Math.round(heldOut * 1000) / 1000,
   };

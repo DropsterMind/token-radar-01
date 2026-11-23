@@ -84,7 +84,7 @@ writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEX
 // The fit, for the log: the regression the board rests on and the held-out
 // error behind its honest range, so a reader can see the calibration at a glance.
 const fitLine = `log(mcap) = ${radar.fit.intercept.toFixed(3)} + ${radar.fit.slope.toFixed(3)} * log(TVL) (n=${radar.fit.n})`;
-const errorLine = `held-out median log error ${radar.held_out_log_error}, range factor x${radar.range_factor}`;
+const errorLine = `held-out median log error ${radar.held_out_log_error}, range factor x${radar.range_factor}; in-sample median residual ${radar.fit_diagnostics.median_abs_residual}, ${radar.fit_diagnostics.within_range_pct}% of live tokens inside the range`;
 // The board's head, for the log: the five strongest rows by implied value.
 const topLines = topRows(board, 5)
   .map((r) => `#${r.rank} ${r.name} $${r.implied_value_usd.toLocaleString('en-US')}`)
