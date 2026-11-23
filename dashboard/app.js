@@ -175,7 +175,7 @@
     return el('section', { class: 'lede' },
       el('div', null,
         el('h1', { text: DATA.watchlist_size + ' watchlist protocols, ranked by implied value' }),
-        el('p', { text: 'The watchlist is the floor: every protocol with at least $' + Math.round(DATA.floor_usd / 1e6) + 'M of TVL and no token on record. The early radar adds ' + DATA.early_size + ' pre-token protocols below that floor. Implied value is a model, not a promise.' })
+        el('p', { text: 'The watchlist is the floor: every protocol with at least $' + Math.round(DATA.floor_usd / 1e6) + 'M of TVL and no token on record, plus ' + DATA.early_size + ' pre-token protocols the early radar found below that floor. Implied value is a model estimate, not a promise of a token or a price.' })
       ),
       el('div', { class: 'facts' },
         el('div', { class: 'fact' }, el('span', { text: 'Watchlist covered' }), el('b', { text: DATA.watchlist_size + ' / ' + DATA.watchlist_size })),
@@ -292,11 +292,47 @@
     );
   }
 
+  // The peer table: every category's median mcap/TVL from the live-token
+  // protocols in this snapshot, with the count of live peers behind it.
+  // Categories with fewer than 5 live peers fall back to the global median.
+  function peerPanel() {
+    var peers = DATA.peers || [];
+    var rows = peers.map(function (p) {
+      return el('tr', null,
+        el('td', null, el('b', { text: p.category })),
+        el('td', { class: 'num', text: p.multiple.toFixed(4) }),
+        el('td', { class: 'num', text: String(p.n) }),
+        el('td', { class: 'num', text: p.n >= 8 ? 'high' : 'medium' })
+      );
+    });
+    rows.push(el('tr', null,
+      el('td', null, el('b', { text: 'Global median (fallback)' })),
+      el('td', { class: 'num', text: DATA.peer_global.toFixed(4) }),
+      el('td', { class: 'num', text: 'all live peers' }),
+      el('td', { class: 'num', text: 'low' })
+    ));
+    return el('section', { class: 'panel model' },
+      el('h2', { text: 'Peer multiples by category' }),
+      el('p', { class: 'sub', text: 'Each multiple is the median market-cap / TVL of the live-token protocols in that category, winsorised to 0.02–0.80. A protocol in a category with fewer than 5 live peers is scored on the global median instead, and its confidence is low.' }),
+      el('div', { class: 'table-wrap' },
+        el('table', null,
+          el('thead', null, el('tr', null,
+            el('th', { scope: 'col', text: 'Category' }),
+            el('th', { scope: 'col', text: 'Peer multiple' }),
+            el('th', { scope: 'col', text: 'Live peers' }),
+            el('th', { scope: 'col', text: 'Confidence' })
+          )),
+          el('tbody', null, rows)
+        )
+      )
+    );
+  }
+
   function modelPanel() {
     var m = DATA.model;
     return el('section', { class: 'panel model' },
       el('h2', { text: 'How implied value is computed' }),
-      el('p', { class: 'sub', text: 'Every row is scored by one function of the snapshot figures. No protocol name is special-cased, and no row is hand-picked.' }),
+      el('p', { class: 'sub', text: 'One function of the snapshot figures scores every row. No protocol name is special-cased and no row is hand-picked; the peer multiples below come from the live-token protocols in this same snapshot.' }),
       el('div', { class: 'formula' },
         'implied = round( tvl_usd x peer_multiple x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') x size )'
       ),
@@ -363,7 +399,10 @@
     shell.appendChild(lede());
     shell.appendChild(controls());
     shell.appendChild(state.tab === 'pre-token' ? boardTable() : liveTable());
-    if (state.tab === 'pre-token') shell.appendChild(modelPanel());
+    if (state.tab === 'pre-token') {
+      shell.appendChild(modelPanel());
+      shell.appendChild(peerPanel());
+    }
     app.appendChild(shell);
     app.setAttribute('aria-busy', 'false');
     if (!dialog.isConnected) app.appendChild(dialog);
