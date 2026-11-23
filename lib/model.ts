@@ -1,4 +1,6 @@
-// radar-2: the token radar's scoring model.
+import { createHash } from 'node:crypto';
+
+// radar-3: the token radar's scoring model.
 //
 // One sealed snapshot goes in, one ranked board comes out. The board always
 // covers the whole watchlist — the watchlist is a floor, never a ceiling —
@@ -8,32 +10,48 @@
 // snapshot's live-token protocols are kept apart and shown with the market's
 // own values, never mixed into the ranked board.
 //
-// Implied value comes only from the snapshot's own figures, calibrated on the
-// snapshot itself, never from a hand-written list of names:
+// The value base is a log-log regression fitted on the snapshot's own
+// live-token protocols, at runtime, never hardcoded and never by name:
 //
-//   peer         median mcap/TVL of live-token protocols in the same category
-//                (at least 5 live peers, ratios winsorised to [0.02, 0.80]);
-//                categories with fewer live peers fall back to the global
-//                median. In this snapshot the global median is about 0.21.
-//   base         tvl_usd * peer
-//   growth       change_7d clamped to [-40, 80] percent
-//   growthMult   1 + (growth / 100) * 0.4
-//   maturity     0.65 + min(age_days, 1095) / 1095 * 0.35
-//                (age unknown: 365 days)
-//   sizeMult     (tvl_usd / $100M) ^ -0.07, clamped to [0.75, 1.25]
-//                A log-log fit of the live tokens gives
-//                log(mcap) ~ 8.49 + 0.43 * log(TVL), so value grows
-//                sub-linearly with TVL; the dampener is deliberately mild
-//                (-0.07, not the full fitted slope) because the fit is noisy
-//                (residual sd about 1.96 in log terms).
-//   implied      max(1, round(base * growthMult * maturity * sizeMult))
+//   log(mcap) = intercept + slope * log(TVL)
 //
-// The estimate is honest about its error. A 5-fold held-out split of the
-// live-token protocols gives a median absolute log error near 1.6, a typical
-// factor of about 5x, so every row also carries implied/5 and implied*5. The
-// point estimate ranks the board; the range is what the dashboard shows, so a
-// reader never mistakes the estimate for a price. No protocol name is ever
-// special-cased: the same function scores every row.
+// fitted on the 105 live-token protocols (mcap > 0, TVL > 0, outside
+// CEX/Bridge/Canonical Bridge). On this snapshot the fit is
+// log(mcap) = 8.485 + 0.429 * log(TVL): value grows sub-linearly with TVL —
+// doubling TVL raises implied value only about 35% — because the ratio
+// mcap/TVL falls as protocols get bigger (correlation -0.46 between log TVL
+// and log(mcap/TVL)). A flat peer multiple would overvalue the giants and
+// undervalue the middle of the board; the regression does not.
+//
+// Why the regression, and not the category medians of radar-2? A 5-fold
+// held-out check on the live tokens, split by slug hash, says so:
+//
+//   global median mcap/TVL            median error 1.58 log units (x4.9)
+//   category median mcap/TVL (radar-2) median error 1.59 log units (x4.9)
+//   category median, shrunk to global median error 1.63 log units (x5.1)
+//   log-log regression (radar-3)       median error 1.26 log units (x3.5)
+//   regression + category offset       median error 1.33 log units (x3.8)
+//   regression + 7-day growth          median error 1.26 log units (x3.5)
+//
+// Category offsets overfit, and 7-day growth adds nothing (its correlation
+// with log(mcap/TVL) is -0.09; age is 0.00; chain count is 0.00). So the
+// regression stands alone as the value base. Growth and age still adjust the
+// ranking, but as launch-readiness adjustments, not as value predictors:
+// a fast-growing protocol that has waited long with no token is the one most
+// ready to launch, and the radar is a launch radar.
+//
+//   growth     change_7d clamped to [-40, 80] percent
+//   growthMult 1 + (growth / 100) * 0.4
+//   maturity   0.65 + min(age_days, 1095) / 1095 * 0.35
+//              (age unknown: 365 days)
+//   implied    max(1, round(exp(intercept + slope * ln(TVL)) * growthMult * maturity))
+//
+// The honest range comes from the same held-out check: the regression's
+// median absolute log error is 1.26, a factor of about 3.5, so every row
+// carries implied/3.5 and implied*3.5. The point estimate ranks the board;
+// the range is what the dashboard shows, so a reader never mistakes the
+// estimate for a price. No protocol name is ever special-cased: one function
+// scores every row, and its calibration is computed from the snapshot itself.
 
 /** One protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -60,7 +78,6 @@ export interface Snapshot {
 
 /** The model's constants, stated in the dashboard and changeable by the sandbox. */
 export interface ModelConstants {
-  base_multiple: number;
   growth_weight: number;
   growth_floor: number;
   growth_cap: number;
@@ -71,7 +88,6 @@ export interface ModelConstants {
 }
 
 export const MODEL: ModelConstants = {
-  base_multiple: 0.205,
   growth_weight: 0.4,
   growth_floor: -40,
   growth_cap: 80,
@@ -81,19 +97,17 @@ export const MODEL: ModelConstants = {
   unknown_age_days: 365,
 };
 
-/** Size dampener exponent: value grows slightly sub-linearly with TVL. */
-export const SIZE_EXPONENT = -0.07;
-/** Held-out validation factor: median absolute log error ~1.6, i.e. ~5x. */
-export const RANGE_FACTOR = 5;
-
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
 /** Pre-token protocols below the watchlist floor the early radar carries, by TVL. */
 export const EARLY_ROWS = 260;
 
 /** Live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
+
+/** Categories the peer universe excludes: exchanges and bridges are not comparable launches. */
+export const EXCLUDED_CATEGORIES = ['CEX', 'Bridge', 'Canonical Bridge'];
 
 /** One farm step: what to do, what it costs, how long it takes. */
 export interface FarmStep {
@@ -120,15 +134,11 @@ export interface BoardRow {
   implied_value_usd: number;
   implied_value_low_usd: number;
   implied_value_high_usd: number;
-  peer_multiple: number;
-  peer_n: number;
-  confidence: 'high' | 'medium' | 'low';
+  base_usd: number;
   model: {
-    base_multiple: number;
     growth_pct: number;
     growth_multiplier: number;
     maturity_multiplier: number;
-    size_multiplier: number;
     age_days: number | null;
   };
   farm_steps: string[];
@@ -149,12 +159,9 @@ export interface RadarRow {
   implied_value_usd: number;
   implied_value_low_usd: number;
   implied_value_high_usd: number;
-  peer_multiple: number;
-  peer_n: number;
-  confidence: 'high' | 'medium' | 'low';
+  base_usd: number;
   growth_multiplier: number;
   maturity_multiplier: number;
-  size_multiplier: number;
 }
 
 /** A live-token protocol: it already trades, so the board shows the market's value, not a model's. */
@@ -168,14 +175,7 @@ export interface LiveRow {
   change_7d: number | null;
 }
 
-/** One category's peer multiple, for the dashboard's peer table. */
-export interface PeerEntry {
-  category: string;
-  multiple: number;
-  n: number;
-}
-
-/** One category's share of the board: how many rows it holds, how many of them are watchlist rows, their median TVL, and its strongest row. */
+/** One category's share of the board: rows, watchlist rows, median TVL, and its strongest row. */
 export interface CategoryStat {
   category: string;
   rows: number;
@@ -186,7 +186,14 @@ export interface CategoryStat {
   top_implied_usd: number;
 }
 
-/** Everything the dashboard needs: the board, the live set, the peer table, the model. */
+/** The log-log fit: log(mcap) = intercept + slope * log(TVL), from the snapshot's live tokens. */
+export interface LogLogFit {
+  intercept: number;
+  slope: number;
+  n: number;
+}
+
+/** Everything the dashboard needs: the board, the live set, the fit, the model. */
 export interface RadarData {
   as_of: string;
   source: string;
@@ -199,9 +206,10 @@ export interface RadarData {
   live_size: number;
   rows: RadarRow[];
   live: LiveRow[];
-  peers: PeerEntry[];
-  peer_global: number;
   category_stats: CategoryStat[];
+  fit: LogLogFit;
+  range_factor: number;
+  held_out_log_error: number;
 }
 
 /** The snapshot is not one this model can score. */
@@ -235,83 +243,81 @@ function medianOf(sorted: number[]): number {
   return sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
 }
 
-/** The peer calibration the snapshot itself yields: per-category medians and the global one. */
-export interface PeerCalibration {
-  entries: PeerEntry[];
-  global: number;
-  globalN: number;
-}
-
-const EXCLUDED_PEER_CATEGORIES = new Set(['CEX', 'Bridge', 'Canonical Bridge']);
-
-/** Live-token protocols usable as peers: trading, with a market cap and TVL, outside the excluded categories. */
-function peerUniverse(snapshot: Snapshot): SnapshotProtocol[] {
+/** Live-token protocols usable for calibration: trading, with a market cap and TVL, outside the excluded categories. */
+function calibrationUniverse(snapshot: Snapshot): SnapshotProtocol[] {
   return snapshot.protocols.filter(
-    (p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0 && p.category !== null && !EXCLUDED_PEER_CATEGORIES.has(p.category),
+    (p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0 && p.category !== null && !EXCLUDED_CATEGORIES.includes(p.category),
   );
 }
 
-/** A single mcap/TVL ratio, winsorised to [0.02, 0.80] so one outlier cannot move a median. */
-function winsorisedRatio(p: SnapshotProtocol): number {
-  return Math.min(0.8, Math.max(0.02, p.mcap_usd! / p.tvl_usd));
+/** Least-squares fit of log(mcap) on log(TVL) over the given protocols. */
+function fitLine(protocols: SnapshotProtocol[]): LogLogFit {
+  const xs = protocols.map((p) => Math.log(p.tvl_usd));
+  const ys = protocols.map((p) => Math.log(p.mcap_usd!));
+  const n = xs.length;
+  const meanX = xs.reduce((a, x) => a + x, 0) / n;
+  const meanY = ys.reduce((a, y) => a + y, 0) / n;
+  let sxy = 0;
+  let sxx = 0;
+  for (let i = 0; i < n; i++) {
+    sxy += (xs[i]! - meanX) * (ys[i]! - meanY);
+    sxx += (xs[i]! - meanX) ** 2;
+  }
+  const slope = sxx === 0 ? 0 : sxy / sxx;
+  return { intercept: meanY - slope * meanX, slope, n };
+}
+
+/** The log-log fit over the snapshot's live-token protocols, computed fresh on every run. */
+export function fitLogLog(snapshot: Snapshot): LogLogFit {
+  return fitLine(calibrationUniverse(snapshot));
+}
+
+/** Which of the five held-out folds a slug falls in: the first 8 hex digits of its SHA-256, mod 5 — the same split the validation script (work/validate_v3.py) uses, so the runtime measurement and the documented one agree. */
+function foldOf(slug: string): number {
+  const hex = createHash('sha256').update(slug, 'utf8').digest('hex').slice(0, 8);
+  return parseInt(hex, 16) % 5;
 }
 
 /**
- * Calibrate the peer multiples from the snapshot itself. For every category
- * with at least 5 live-token protocols, the median mcap/TVL; plus the global
- * median over all live protocols. Computed fresh on every run, never
- * hardcoded, never by name.
+ * The regression's held-out error: for each of five folds, fit on the other
+ * four and predict the held-out protocols' log market cap. The median
+ * absolute log error is the model's honest uncertainty, and its exponential
+ * is the range factor the board shows.
  */
-export function calibratePeers(snapshot: Snapshot): PeerCalibration {
-  const live = peerUniverse(snapshot);
-  const global = medianOf(live.map(winsorisedRatio).sort((a, b) => a - b));
-  const grouped = new Map<string, number[]>();
-  for (const p of live) {
-    const key = p.category ?? 'Other';
-    const list = grouped.get(key);
-    if (list === undefined) grouped.set(key, [winsorisedRatio(p)]);
-    else list.push(winsorisedRatio(p));
+export function heldOutLogError(snapshot: Snapshot): number {
+  const live = calibrationUniverse(snapshot);
+  const errors: number[] = [];
+  for (let f = 0; f < 5; f++) {
+    const train = live.filter((p) => foldOf(p.slug) !== f);
+    const test = live.filter((p) => foldOf(p.slug) === f);
+    const fit = fitLine(train);
+    for (const p of test) {
+      const predicted = fit.intercept + fit.slope * Math.log(p.tvl_usd);
+      errors.push(Math.abs(predicted - Math.log(p.mcap_usd!)));
+    }
   }
-  const entries: PeerEntry[] = [];
-  for (const [category, ratios] of grouped) {
-    if (ratios.length < 5) continue;
-    entries.push({ category, multiple: medianOf([...ratios].sort((a, b) => a - b)), n: ratios.length });
-  }
-  entries.sort((a, b) => b.n - a.n || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0));
-  return { entries, global, globalN: live.length };
+  return medianOf([...errors].sort((a, b) => a - b));
 }
 
-/** The peer multiple one protocol gets: its category's median, or the global median when its category has too few live peers. */
-export function peerFor(
-  protocol: SnapshotProtocol,
-  calibration: PeerCalibration,
-): { multiple: number; n: number; confidence: 'high' | 'medium' | 'low' } {
-  const hit = protocol.category !== null ? calibration.entries.find((e) => e.category === protocol.category) : undefined;
-  if (hit !== undefined) return { multiple: hit.multiple, n: hit.n, confidence: hit.n >= 8 ? 'high' : 'medium' };
-  return { multiple: calibration.global, n: 0, confidence: 'low' };
-}
-
-/** Everything one scored protocol carries: the value, its honest range, and every multiplier. */
+/** Everything one scored protocol carries: the regression base, the adjustments, the value and its range. */
 export interface ScoredValue {
   implied: number;
   low: number;
   high: number;
+  base: number;
   growthPct: number;
   growthMult: number;
   maturityMult: number;
-  sizeMult: number;
   age: number | null;
-  peerMultiple: number;
-  peerN: number;
-  confidence: 'high' | 'medium' | 'low';
 }
 
-/** Score one protocol under `model`: the multipliers and the implied value. */
+/** Score one protocol: the fitted base, the launch-readiness adjustments, the implied value and its honest range. */
 export function impliedValue(
   protocol: SnapshotProtocol,
   asOf: string,
   model: ModelConstants,
-  peer?: { multiple: number; n: number; confidence: 'high' | 'medium' | 'low' },
+  fit: LogLogFit,
+  rangeFactor: number,
 ): ScoredValue {
   const age = ageDays(asOf, protocol.listed_at);
   const rawGrowth = finite(protocol.change_7d, 0);
@@ -319,22 +325,17 @@ export function impliedValue(
   const growthMult = 1 + (growthPct / 100) * model.growth_weight;
   const ageForModel = age ?? model.unknown_age_days;
   const maturityMult = model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
-  const sizeMult = Math.min(1.25, Math.max(0.75, Math.pow(protocol.tvl_usd / 100_000_000, SIZE_EXPONENT)));
-  const peerMultiple = peer?.multiple ?? model.base_multiple;
-  const base = protocol.tvl_usd * peerMultiple;
-  const implied = Math.max(1, Math.round(base * growthMult * maturityMult * sizeMult));
+  const base = Math.exp(fit.intercept + fit.slope * Math.log(protocol.tvl_usd));
+  const implied = Math.max(1, Math.round(base * growthMult * maturityMult));
   return {
     implied,
-    low: Math.max(1, Math.round(implied / RANGE_FACTOR)),
-    high: Math.round(implied * RANGE_FACTOR),
+    low: Math.max(1, Math.round(implied / rangeFactor)),
+    high: Math.round(implied * rangeFactor),
+    base: Math.round(base),
     growthPct,
     growthMult,
     maturityMult,
-    sizeMult,
     age,
-    peerMultiple,
-    peerN: peer?.n ?? 0,
-    confidence: peer?.confidence ?? 'low',
   };
 }
 
@@ -378,8 +379,10 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     .slice(0, EARLY_ROWS);
   for (const p of early) chosen.set(p.slug, p);
 
-  const calibration = calibratePeers(snapshot);
-  const scored = [...chosen.values()].map((p) => ({ p, ...impliedValue(p, snapshot.as_of, model, peerFor(p, calibration)) }));
+  const fit = fitLogLog(snapshot);
+  const heldOut = heldOutLogError(snapshot);
+  const rangeFactor = Math.round(Math.exp(heldOut) * 10) / 10;
+  const scored = [...chosen.values()].map((p) => ({ p, ...impliedValue(p, snapshot.as_of, model, fit, rangeFactor) }));
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   return scored.map((s, i) => ({
     rank: i + 1,
@@ -398,15 +401,11 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     implied_value_usd: s.implied,
     implied_value_low_usd: s.low,
     implied_value_high_usd: s.high,
-    peer_multiple: s.peerMultiple,
-    peer_n: s.peerN,
-    confidence: s.confidence,
+    base_usd: s.base,
     model: {
-      base_multiple: s.peerMultiple,
       growth_pct: s.growthPct,
       growth_multiplier: round4(s.growthMult),
       maturity_multiplier: round4(s.maturityMult),
-      size_multiplier: round4(s.sizeMult),
       age_days: s.age,
     },
     farm_steps: farmSteps(s.p, s.age).map(stepText),
@@ -547,12 +546,9 @@ export function radarRow(row: BoardRow): RadarRow {
     implied_value_usd: row.implied_value_usd,
     implied_value_low_usd: row.implied_value_low_usd,
     implied_value_high_usd: row.implied_value_high_usd,
-    peer_multiple: row.peer_multiple,
-    peer_n: row.peer_n,
-    confidence: row.confidence,
+    base_usd: row.base_usd,
     growth_multiplier: m.growth_multiplier,
     maturity_multiplier: m.maturity_multiplier,
-    size_multiplier: m.size_multiplier,
   };
 }
 
@@ -592,7 +588,9 @@ export function categoryStats(board: BoardRow[], snapshot: Snapshot): CategorySt
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
   const board = buildBoard(snapshot, model);
   const live = liveRows(snapshot);
-  const calibration = calibratePeers(snapshot);
+  const fit = fitLogLog(snapshot);
+  const heldOut = heldOutLogError(snapshot);
+  const rangeFactor = Math.round(Math.exp(heldOut) * 10) / 10;
   const early = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
   const radar: RadarData = {
     as_of: snapshot.as_of,
@@ -606,9 +604,10 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     live_size: live.length,
     rows: board.map(radarRow),
     live,
-    peers: calibration.entries,
-    peer_global: calibration.global,
     category_stats: categoryStats(board, snapshot),
+    fit,
+    range_factor: rangeFactor,
+    held_out_log_error: Math.round(heldOut * 1000) / 1000,
   };
   return { board, radar };
 }

@@ -34,19 +34,17 @@
 
   // The model in one function: the page recomputes a row from the snapshot
   // figures and checks the number board.json carries, so the page's code and
-  // the board's data are visibly the same arithmetic. The peer multiple is
-  // per-category, derived from live-token protocols in the snapshot itself;
-  // size is a mild sub-linear dampener, (TVL / $100M) ^ -0.07, clamped to
-  // [0.75, 1.25]. Size is recomputed from TVL here, not taken from the rounded
-  // value board.json carries, so the recomputation matches to the dollar.
+  // the board's data are visibly the same arithmetic. The value base is the
+  // log-log regression fitted on this snapshot's live-token protocols:
+  // exp(intercept + slope * ln(TVL)). Growth and age adjust the ranking
+  // toward protocols most ready to launch; they are not value predictors.
   function impliedOf(row, model) {
     var growth = Math.min(model.growth_cap, Math.max(model.growth_floor, row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d));
     var growthMult = 1 + (growth / 100) * model.growth_weight;
     var age = row.age_days === null || row.age_days === undefined ? model.unknown_age_days : row.age_days;
     var maturity = model.maturity_floor + (Math.min(Math.max(age, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
-    var peer = row.peer_multiple === null || row.peer_multiple === undefined ? model.base_multiple : row.peer_multiple;
-    var size = Math.min(1.25, Math.max(0.75, Math.pow(row.tvl_usd / 100000000, -0.07)));
-    return Math.max(1, Math.round(row.tvl_usd * peer * growthMult * maturity * size));
+    var base = Math.exp(DATA.fit.intercept + DATA.fit.slope * Math.log(row.tvl_usd));
+    return Math.max(1, Math.round(base * growthMult * maturity));
   }
 
   function el(tag, attrs) {
@@ -318,35 +316,37 @@
     );
   }
 
-  // The peer table: every category's median mcap/TVL from the live-token
-  // protocols in this snapshot, with the count of live peers behind it.
-  // Categories with fewer than 5 live peers fall back to the global median.
-  function peerPanel() {
-    var peers = DATA.peers || [];
-    var rows = peers.map(function (p) {
+  // The validation panel: how each candidate model did on the live-token
+  // protocols, measured by a 5-fold held-out check split by slug hash.
+  // The numbers come from the validation run on this snapshot (work/validate_v3.py);
+  // the regression won, so it is the model, and its own held-out error —
+  // recomputed at runtime and carried in DATA — sets the honest range.
+  function validationPanel() {
+    var candidates = [
+      { name: 'Global median mcap / TVL', error: 1.581, factor: 'x4.9' },
+      { name: 'Category median mcap / TVL (radar-2)', error: 1.592, factor: 'x4.9' },
+      { name: 'Category median, shrunk to global', error: 1.630, factor: 'x5.1' },
+      { name: 'Log-log regression (radar-3)', error: DATA.held_out_log_error, factor: 'x' + DATA.range_factor },
+      { name: 'Regression + category offset', error: 1.328, factor: 'x3.8' },
+      { name: 'Regression + 7-day growth', error: 1.264, factor: 'x3.5' }
+    ];
+    var rows = candidates.map(function (c) {
+      var chosen = c.name.indexOf('radar-3') >= 0;
       return el('tr', null,
-        el('td', null, el('b', { text: p.category })),
-        el('td', { class: 'num', text: p.multiple.toFixed(4) }),
-        el('td', { class: 'num', text: String(p.n) }),
-        el('td', { class: 'num', text: p.n >= 8 ? 'high' : 'medium' })
+        el('td', null, el('b', { text: c.name + (chosen ? ' — chosen' : '') })),
+        el('td', { class: 'num', text: c.error.toFixed(3) }),
+        el('td', { class: 'num', text: c.factor })
       );
     });
-    rows.push(el('tr', null,
-      el('td', null, el('b', { text: 'Global median (fallback)' })),
-      el('td', { class: 'num', text: DATA.peer_global.toFixed(4) }),
-      el('td', { class: 'num', text: 'all live peers' }),
-      el('td', { class: 'num', text: 'low' })
-    ));
     return el('section', { class: 'panel model' },
-      el('h2', { text: 'Peer multiples by category' }),
-      el('p', { class: 'sub', text: 'Each multiple is the median market-cap / TVL of the live-token protocols in that category, winsorised to 0.02–0.80. A protocol in a category with fewer than 5 live peers is scored on the global median instead, and its confidence is low.' }),
+      el('h2', { text: 'How the model was chosen' }),
+      el('p', { class: 'sub', text: 'Each candidate predicts the market cap of live-token protocols it was not fitted on: five folds, split by slug hash, median absolute log error. Category offsets overfit, 7-day growth adds nothing (its correlation with log(mcap/TVL) is -0.09; age 0.00; chain count 0.00), and a flat peer multiple misses that mcap/TVL falls as TVL grows (correlation -0.46). The regression wins, so the board uses it — and its own held-out error of ' + DATA.held_out_log_error + ' log units is the honest range of x' + DATA.range_factor + ' every row shows.' }),
       el('div', { class: 'table-wrap' },
         el('table', null,
           el('thead', null, el('tr', null,
-            el('th', { scope: 'col', text: 'Category' }),
-            el('th', { scope: 'col', text: 'Peer multiple' }),
-            el('th', { scope: 'col', text: 'Live peers' }),
-            el('th', { scope: 'col', text: 'Confidence' })
+            el('th', { scope: 'col', text: 'Candidate model' }),
+            el('th', { scope: 'col', text: 'Median log error' }),
+            el('th', { scope: 'col', text: 'Typical factor' })
           )),
           el('tbody', null, rows)
         )
@@ -398,12 +398,12 @@
     var m = DATA.model;
     return el('section', { class: 'panel model' },
       el('h2', { text: 'How implied value is computed' }),
-      el('p', { class: 'sub', text: 'One function of the snapshot figures scores every row. No protocol name is special-cased and no row is hand-picked; the peer multiples below come from the live-token protocols in this same snapshot.' }),
+      el('p', { class: 'sub', text: 'One function of the snapshot figures scores every row. No protocol name is special-cased and no row is hand-picked; the fit below is computed from the live-token protocols in this same snapshot.' }),
       el('div', { class: 'formula' },
-        'implied = round( tvl_usd x peer_multiple x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') x size )'
+        'implied = round( exp(' + DATA.fit.intercept.toFixed(3) + ' + ' + DATA.fit.slope.toFixed(3) + ' x ln(tvl_usd)) x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') )'
       ),
-      el('p', { class: 'sub', text: 'peer_multiple is the median market-cap / TVL of live-token protocols in the same category, computed from this snapshot (global median ' + m.base_multiple + ' where a category has fewer than 5 live peers). Size is (TVL / $100M) ^ -0.07, clamped to 0.75–1.25: value grows slightly sub-linearly with TVL, as the live-token fit shows. TVL and seven-day growth come from the snapshot. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days.' }),
-      el('p', { class: 'sub', text: 'Honest uncertainty: a 5-fold held-out check of the live-token peers gives a median error of about 5x, so every row shows a range of implied / 5 to implied x 5. The point estimate ranks the board; the range is the estimate, not a price. No token is promised: a protocol records no token, which is not proof it has none, and a farm plan is a way to use it, not a guarantee of a launch.' }),
+      el('p', { class: 'sub', text: 'The base is a log-log regression fitted on the ' + DATA.fit.n + ' live-token protocols in this snapshot: log(mcap) = ' + DATA.fit.intercept.toFixed(3) + ' + ' + DATA.fit.slope.toFixed(3) + ' x log(TVL). Value grows sub-linearly with TVL — doubling TVL raises the base only about 35% — because mcap/TVL falls as protocols get bigger. Growth and age are launch-readiness adjustments, not value predictors: a fast-growing protocol that has waited long with no token is most ready to launch. Age is the time since the protocol was first listed; an unlisted age uses ' + m.unknown_age_days + ' days.' }),
+      el('p', { class: 'sub', text: 'Honest uncertainty: a 5-fold held-out check of the regression gives a median error of ' + DATA.held_out_log_error + ' log units, so every row shows a range of implied / ' + DATA.range_factor + ' to implied x ' + DATA.range_factor + '. The point estimate ranks the board; the range is the estimate, not a price. No token is promised: a protocol records no token, which is not proof it has none, and a farm plan is a way to use it, not a guarantee of a launch.' }),
       el('p', { class: 'sub', text: 'The board covers all ' + DATA.watchlist_size + ' watchlist protocols plus every other rankable pre-token protocol in the snapshot — ' + DATA.board_size + ' rows in all — and the live-token protocols are set aside with their market caps shown.' })
     );
   }
@@ -436,13 +436,11 @@
         el('div', null, el('span', { text: 'TVL' }), el('b', { class: 'num', text: fmtUsd(row.tvl_usd) })),
         el('div', null, el('span', { text: 'Seven-day growth' }), el('b', { class: 'num', text: fmtPct(row.change_7d) })),
         el('div', null, el('span', { text: 'Age with no token' }), el('b', { class: 'num', text: fmtAge(row.age_days) })),
-        el('div', null, el('span', { text: 'Peer multiple (mcap / TVL)' }), el('b', { class: 'num', text: (typeof row.peer_multiple === 'number' ? row.peer_multiple.toFixed(4) : String(row.peer_multiple)) + (row.peer_n ? ' (' + row.peer_n + ' live peers)' : ' (global median)') })),
+        el('div', null, el('span', { text: 'Regression base' }), el('b', { class: 'num', text: fmtUsd(row.base_usd) })),
         el('div', null, el('span', { text: 'Growth multiplier' }), el('b', { class: 'num', text: String(row.growth_multiplier) })),
         el('div', null, el('span', { text: 'Maturity multiplier' }), el('b', { class: 'num', text: String(row.maturity_multiplier) })),
-        el('div', null, el('span', { text: 'Size multiplier' }), el('b', { class: 'num', text: String(row.size_multiplier) })),
         el('div', null, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) })),
-        el('div', null, el('span', { text: 'Honest range (implied / 5 to x 5)' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_low_usd) + ' – ' + fmtUsd(row.implied_value_high_usd) })),
-        el('div', null, el('span', { text: 'Confidence' }), el('b', { class: 'num', text: row.confidence || 'low' }))
+        el('div', null, el('span', { text: 'Honest range (implied / ' + DATA.range_factor + ' to x ' + DATA.range_factor + ')' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_low_usd) + ' – ' + fmtUsd(row.implied_value_high_usd) }))
       ),
       el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': the same function scores every protocol. The page recomputes this row as ' + fmtUsd(impliedOf(row, DATA.model)) + (impliedOf(row, DATA.model) === row.implied_value_usd ? ', the same number board.json carries.' : ', which differs from the board: the data would be stale.') + ' This is an estimate, not a price, and no token is promised.' })
     ));
@@ -475,7 +473,7 @@
     shell.appendChild(state.tab === 'pre-token' ? boardTable() : liveTable());
     if (state.tab === 'pre-token') {
       shell.appendChild(modelPanel());
-      shell.appendChild(peerPanel());
+      shell.appendChild(validationPanel());
       shell.appendChild(categoryPanel());
     }
     app.appendChild(shell);
