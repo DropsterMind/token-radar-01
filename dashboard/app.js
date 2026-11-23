@@ -282,6 +282,10 @@
     );
   }
 
+  // The Live token view: the protocols that already trade, shown with the
+  // market's own values — TVL, 7-day growth and market cap — and no implied
+  // value, because a traded token needs no model. Rows here are not clickable:
+  // there is no farm plan for a protocol that already has a token.
   function liveTable() {
     var tbody = el('tbody');
     DATA.live.forEach(function (r) {
@@ -398,6 +402,10 @@
   var dialog = el('dialog', { class: 'detail', id: 'detail', 'aria-labelledby': 'detail-title' });
   dialog.addEventListener('close', function () { state.selected = null; writeHash(); });
 
+  // The detail drawer: one protocol's implied value broken into its inputs,
+  // the recomputation that checks the board's number, the honest range and
+  // confidence, and the seven-step farm plan. It opens as a modal dialog so
+  // the board stays where the reader left it, and Escape closes it.
   function openDetail(slug) {
     var row = DATA.rows.filter(function (r) { return r.slug === slug; })[0];
     if (!row) return;
@@ -445,6 +453,10 @@
     }
   }
 
+  // Render the whole page from state: header, lede, filters, the table for
+  // the active tab, and — on the pre-token tab — the model, peer and coverage
+  // panels. The detail dialog is kept attached so an open drawer survives
+  // a re-render, and a selected slug in the hash reopens its drawer.
   function render() {
     app.textContent = '';
     var shell = el('div', { class: 'shell' });

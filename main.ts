@@ -12,7 +12,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { boardIssue, buildRadar, dataScript, parseSnapshot } from './lib/model.ts';
+import { boardIssue, buildRadar, dataScript, parseSnapshot, topRows } from './lib/model.ts';
 import { buildDossier } from './vendor/makefun-board.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -87,8 +87,13 @@ const peerLines = radar.peers
   .slice(0, 5)
   .map((p) => `${p.category} ${p.multiple.toFixed(4)} (n=${p.n})`)
   .join(', ');
+// The board's head, for the log: the five strongest rows by implied value.
+const topLines = topRows(board, 5)
+  .map((r) => `#${r.rank} ${r.name} $${r.implied_value_usd.toLocaleString('en-US')}`)
+  .join(', ');
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
+    `token radar: top rows ${topLines}\n` +
     `token radar: top peers ${peerLines}; global median ${radar.peer_global.toFixed(4)}\n` +
     `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (3 files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );

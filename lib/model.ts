@@ -525,6 +525,11 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
   }));
 }
 
+/** The board's strongest rows, for a log line or a headline: the board is already ranked, so this is a slice. */
+export function topRows(board: BoardRow[], count: number): BoardRow[] {
+  return board.slice(0, Math.max(0, count));
+}
+
 /** A board row's compact form for data.js; the page builds the farm plan itself. */
 export function radarRow(row: BoardRow): RadarRow {
   const m = row.model;
