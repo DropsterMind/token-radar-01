@@ -1,6 +1,10 @@
 // Token Radar dashboard. It reads window.RADAR (written beside dashboard/ by
 // main.ts) and renders the ranked board, a filterable table, and a per-protocol
 // detail drawer with the model's own inputs and the protocol's farm plan.
+// Below the board sit three panels that explain the ranking: how implied
+// value is computed, the peer multiple of every category, and the board's
+// coverage by category. The live-token protocols get their own tab, shown
+// with the market's values instead of a model's.
 // No network: every byte it shows is in data.js.
 (function () {
   'use strict';
@@ -160,6 +164,8 @@
     });
   }
 
+  // The page header: the brand mark and name on the left, the snapshot date,
+  // the data source and the model version on the right.
   function header() {
     return el('header', { class: 'top' },
       el('div', { class: 'brand' }, el('span', { class: 'mark' }), el('span', { class: 'brand-name', text: 'Token Radar' })),
@@ -171,6 +177,9 @@
     );
   }
 
+  // The lede: the headline count and one plain sentence about what the
+  // watchlist is, beside four facts — watchlist coverage, rows scored,
+  // early rows, and live-token protocols set aside.
   function lede() {
     return el('section', { class: 'lede' },
       el('div', null,
