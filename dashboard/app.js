@@ -221,6 +221,34 @@
     );
   }
 
+  // One board row: rank, name, TVL, 7-day growth, age, the implied-value bar,
+  // and the token status. Clicking — or pressing Enter on — a row opens it.
+  function boardRow(r, max) {
+    var growth = r.change_7d === null ? 'n/a' : fmtPct(r.change_7d);
+    var growthClass = r.change_7d === null ? '' : r.change_7d >= 0 ? 'pos' : 'neg';
+    var chainText = (r.chains && r.chains.length ? r.chains.slice(0, 2).join(', ') : 'an unnamed chain');
+    return el('tr', {
+      'data-selected': state.selected === r.slug ? 'true' : 'false',
+      tabindex: '0',
+      onclick: function () { openDetail(r.slug); },
+      onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(r.slug); } }
+    },
+      el('td', { class: 'num', text: String(r.rank) }),
+      el('td', null, el('div', { class: 'name' },
+        el('b', { text: r.name }),
+        el('span', { class: 'sub', text: (r.category || 'Other') + ' on ' + chainText })
+      )),
+      el('td', { class: 'num', text: fmtUsd(r.tvl_usd) }),
+      el('td', { class: 'num ' + growthClass, text: growth }),
+      el('td', { class: 'num', text: fmtAge(r.age_days) }),
+      el('td', null, el('div', { class: 'implied' },
+        el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(3, Math.round((r.implied_value_usd / max) * 100)) + '%' })),
+        el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) })
+      )),
+      el('td', null, el('span', { class: 'status', text: 'no token' }))
+    );
+  }
+
   function boardTable() {
     var list = sortedRows(rows());
     if (list.length === 0) {
@@ -233,29 +261,7 @@
     var max = list[0].implied_value_usd || 1;
     var tbody = el('tbody');
     list.forEach(function (r) {
-      var growth = r.change_7d === null ? 'n/a' : fmtPct(r.change_7d);
-      var growthClass = r.change_7d === null ? '' : r.change_7d >= 0 ? 'pos' : 'neg';
-      var tr = el('tr', {
-        'data-selected': state.selected === r.slug ? 'true' : 'false',
-        tabindex: '0',
-        onclick: function () { openDetail(r.slug); },
-        onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(r.slug); } }
-      },
-        el('td', { class: 'num', text: String(r.rank) }),
-        el('td', null, el('div', { class: 'name' },
-          el('b', { text: r.name }),
-          el('span', { class: 'sub', text: (r.category || 'Other') + ' on ' + (r.chains && r.chains.length ? r.chains.slice(0, 2).join(', ') : 'an unnamed chain') })
-        )),
-        el('td', { class: 'num', text: fmtUsd(r.tvl_usd) }),
-        el('td', { class: 'num ' + growthClass, text: growth }),
-        el('td', { class: 'num', text: fmtAge(r.age_days) }),
-        el('td', null, el('div', { class: 'implied' },
-          el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(3, Math.round((r.implied_value_usd / max) * 100)) + '%' })),
-          el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) })
-        )),
-        el('td', null, el('span', { class: 'status', text: 'no token' }))
-      );
-      tbody.appendChild(tr);
+      tbody.appendChild(boardRow(r, max));
     });
     return el('div', { class: 'panel' },
       el('div', { class: 'table-wrap' },

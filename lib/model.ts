@@ -350,15 +350,16 @@ const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
   const index = bySlug(snapshot.protocols);
   const chosen = new Map<string, SnapshotProtocol>();
-  // The watchlist is the floor: every slug it names is in, even one the
-  // snapshot no longer carries — coverage is the gate's row and is never
-  // gambled on a missing record.
+  // The watchlist is the floor: every slug it names is in. Even a slug the
+  // snapshot no longer carries would be in — coverage is the gate's row and
+  // is never gambled on a missing record.
   for (const slug of snapshot.watchlist) {
-    const p = index.get(slug);
-    if (p !== undefined) chosen.set(slug, p);
+    const found = index.get(slug);
+    if (found !== undefined) chosen.set(slug, found);
   }
-  // The early radar: pre-token protocols below the watchlist floor, by TVL,
-  // capped. Never a replacement for a watchlist row: a chosen protocol stays.
+  // The early radar: rankable pre-token protocols below the watchlist floor,
+  // largest TVL first, capped at EARLY_ROWS. A chosen protocol stays chosen:
+  // the early radar adds rows, it never replaces a watchlist row.
   const early = snapshot.protocols
     .filter((p) => !chosen.has(p.slug) && isRankable(p) && p.tvl_usd < snapshot.floor_usd)
     .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
@@ -366,11 +367,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
   for (const p of early) chosen.set(p.slug, p);
 
   const calibration = calibratePeers(snapshot);
-  const scored = [...chosen.values()].map((p) => {
-    const peer = peerFor(p, calibration);
-    const v = impliedValue(p, snapshot.as_of, model, peer);
-    return { p, ...v };
-  });
+  const scored = [...chosen.values()].map((p) => ({ p, ...impliedValue(p, snapshot.as_of, model, peerFor(p, calibration)) }));
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   return scored.map((s, i) => ({
     rank: i + 1,
