@@ -338,11 +338,11 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     implied_value_usd: s.implied,
     implied_value_low_usd: s.low,
     implied_value_high_usd: s.high,
-    peer_multiple: round4(s.peerMultiple),
+    peer_multiple: s.peerMultiple,
     peer_n: s.peerN,
     confidence: s.confidence,
     model: {
-      base_multiple: round4(s.peerMultiple),
+      base_multiple: s.peerMultiple,
       growth_pct: s.growthPct,
       growth_multiplier: round4(s.growthMult),
       maturity_multiplier: round4(s.maturityMult),

@@ -36,9 +36,9 @@
     var age = row.age_days === null || row.age_days === undefined ? model.unknown_age_days : row.age_days;
     var maturity = model.maturity_floor + (Math.min(Math.max(age, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
     var peer = row.peer_multiple === null || row.peer_multiple === undefined ? model.base_multiple : row.peer_multiple;
-    var size = row.size_multiplier === null || row.size_multiplier === undefined
-      ? Math.min(1.25, Math.max(0.75, Math.pow(row.tvl_usd / 100000000, -0.07)))
-      : row.size_multiplier;
+    // Recompute size from TVL, not from the rounded value board.json carries, so the
+    // recomputation matches the board to the dollar instead of differing by rounding.
+    var size = Math.min(1.25, Math.max(0.75, Math.pow(row.tvl_usd / 100000000, -0.07)));
     return Math.max(1, Math.round(row.tvl_usd * peer * growthMult * maturity * size));
   }
 
@@ -106,10 +106,11 @@
     return [
       { text: 'Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.', cost: 'under $3 of gas for the first transaction', time: '5 minutes' },
       { text: actionFor(p, capital, chain), cost: '$' + capital + ' of capital and about $' + (capital >= 150 ? 8 : 4) + ' of gas', time: '15 minutes to set up' },
+      { text: "Check " + p.name + "'s own points, rewards or docs page and note exactly which actions it counts, if any.", cost: 'no fee to check', time: '10 minutes' },
       { text: 'Make one qualifying action each week, such as a deposit, a borrow, a swap or a vote.', cost: 'about $2 of gas a week', time: '10 minutes a week' },
       { text: 'Hold the position for at least ' + hold + ' days so the activity is counted in more than one snapshot.', cost: 'the $' + capital + ' stays in the position', time: hold + ' days' },
-      { text: "Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes.", cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
-      { text: 'Write the wallet, the dates and every transaction in a farm log so you can repeat the position or unwind it.', cost: 'nothing but the log', time: '5 minutes' }
+      { text: 'Never pay to claim, never sign a blind transaction, and never share a seed phrase; a real claim costs only gas.', cost: 'no fee to check, and never pay to claim', time: '5 minutes' },
+      { text: "Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes, then log the wallet, dates and every transaction.", cost: 'nothing but the log', time: '10 minutes' }
     ].map(stepText);
   }
 
@@ -325,12 +326,12 @@
         el('div', null, el('span', { text: 'TVL' }), el('b', { class: 'num', text: fmtUsd(row.tvl_usd) })),
         el('div', null, el('span', { text: 'Seven-day growth' }), el('b', { class: 'num', text: fmtPct(row.change_7d) })),
         el('div', null, el('span', { text: 'Age with no token' }), el('b', { class: 'num', text: fmtAge(row.age_days) })),
-        el('div', null, el('span', { text: 'Peer multiple (mcap / TVL)' }), el('b', { class: 'num', text: String(row.peer_multiple) + (row.peer_n ? ' (' + row.peer_n + ' live peers)' : ' (global median)') })),
+        el('div', null, el('span', { text: 'Peer multiple (mcap / TVL)' }), el('b', { class: 'num', text: (typeof row.peer_multiple === 'number' ? row.peer_multiple.toFixed(4) : String(row.peer_multiple)) + (row.peer_n ? ' (' + row.peer_n + ' live peers)' : ' (global median)') })),
         el('div', null, el('span', { text: 'Growth multiplier' }), el('b', { class: 'num', text: String(row.growth_multiplier) })),
         el('div', null, el('span', { text: 'Maturity multiplier' }), el('b', { class: 'num', text: String(row.maturity_multiplier) })),
         el('div', null, el('span', { text: 'Size multiplier' }), el('b', { class: 'num', text: String(row.size_multiplier) })),
         el('div', null, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) })),
-        el('div', null, el('span', { text: 'Honest range (÷5 to ×5)' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_low_usd) + ' – ' + fmtUsd(row.implied_value_high_usd) })),
+        el('div', null, el('span', { text: 'Honest range (implied / 5 to x 5)' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_low_usd) + ' – ' + fmtUsd(row.implied_value_high_usd) })),
         el('div', null, el('span', { text: 'Confidence' }), el('b', { class: 'num', text: row.confidence || 'low' }))
       ),
       el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': the same function scores every protocol. The page recomputes this row as ' + fmtUsd(impliedOf(row, DATA.model)) + (impliedOf(row, DATA.model) === row.implied_value_usd ? ', the same number board.json carries.' : ', which differs from the board: the data would be stale.') + ' This is an estimate, not a price, and no token is promised.' })
