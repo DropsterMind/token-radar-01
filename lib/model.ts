@@ -110,7 +110,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-6';
+export const MODEL_VERSION = 'radar-7';
 
 /** Pre-token protocols below the watchlist floor the early radar carries, by TVL. */
 export const EARLY_ROWS = 260;
@@ -168,6 +168,7 @@ export interface BoardRow {
 export interface RadarRow {
   rank: number;
   slug: string;
+  watchlist: boolean;
   name: string;
   category: string | null;
   chains: string[];
@@ -196,12 +197,13 @@ export interface LiveRow {
   change_7d: number | null;
 }
 
-/** One category's share of the board: rows, watchlist rows, median TVL, and its strongest row. */
+/** One category's share of the board: rows, watchlist rows, median TVL, its strongest row, and the median mcap/TVL its live-token peers trade at (null when the category has no live peers). */
 export interface CategoryStat {
   category: string;
   rows: number;
   watchlist_rows: number;
   median_tvl_usd: number;
+  live_median_multiple: number | null;
   top_slug: string;
   top_name: string;
   top_implied_usd: number;
@@ -517,6 +519,22 @@ export function cheapestChain(p: SnapshotProtocol): { chain: string; tier: GasTi
   return { chain: best, tier: chainTier(best) };
 }
 
+/** Which wallet family a chain belongs to: EVM chains share one wallet kind, Solana and Bitcoin have their own, Sei and Kava are Cosmos-style. The EVM list is conservative — a chain joins it only when its EVM compatibility is verified — and anything unlisted falls back to the generic wallet text, which is true for any chain. */
+export type ChainFamily = 'evm' | 'solana' | 'bitcoin' | 'cosmos' | 'other';
+
+const EVM_CHAINS = new Set([
+  'Arbitrum', 'Optimism', 'Base', 'Polygon', 'zkSync Era', 'Linea', 'Scroll', 'Blast', 'Ink', 'Mode', 'Fraxtal', 'Mantle', 'Unichain', 'Sonic', 'Berachain', 'Hyperliquid L1', 'Monad', 'Plasma',
+  'Ethereum', 'Binance', 'Avalanche', 'Fantom', 'Celo', 'Gnosis', 'Cronos', 'Moonbeam', 'Moonriver', 'World Chain', 'Etherlink', 'Morph', 'RSK', 'Ronin', 'Klaytn', 'Zircuit', 'Manta', 'Sophon', 'Chiliz', 'XDC', 'Plume Mainnet', 'CORE', 'BSquared', 'Arc', 'Fluent', 'Hemi', 'Mezo', 'Pharos', 'RISE', 'Reya Network', 'WEMIX', 'Stable', 'Bifrost Network', 'Robinhood Chain', 'Flare',
+]);
+
+export function chainFamily(chain: string): ChainFamily {
+  if (chain === 'Solana') return 'solana';
+  if (chain === 'Bitcoin') return 'bitcoin';
+  if (chain === 'Sei' || chain === 'Kava') return 'cosmos';
+  if (EVM_CHAINS.has(chain)) return 'evm';
+  return 'other';
+}
+
 /** The capital one farm position needs, from the protocol's own TVL. */
 function capitalFor(p: SnapshotProtocol): number {
   if (p.tvl_usd >= 5_000_000_000) return 250;
@@ -616,7 +634,7 @@ function weeklyActionFor(p: SnapshotProtocol): string {
   }
 }
 
-/** The risk clause for a category, added to the safety step: what can actually go wrong here. */
+/** The risk clause for a category, added to the safety step: what can actually go wrong here. Every kind carries one now; the fallback is the smart-contract risk, which is true for any protocol. */
 function riskNoteFor(p: SnapshotProtocol): string {
   switch (categoryKind(p)) {
     case 'perps': return ` Leverage can liquidate a position fast, so keep the hedge small.`;
@@ -624,7 +642,36 @@ function riskNoteFor(p: SnapshotProtocol): string {
     case 'dex': return ` Liquidity can lose value to impermanent loss, so keep the position small.`;
     case 'bridge': return ` Check the destination chain and finality before bridging.`;
     case 'staking': return ` Unstaking can take days, so do not stake funds you may need soon.`;
-    default: return ``;
+    case 'prediction': return ` Markets can resolve on an oracle or a disputed outcome, so treat a prediction position as money you can lose.`;
+    case 'curator': return ` A vault follows its manager's strategy, so check the vault's allocation and fees before depositing more.`;
+    case 'stable': return ` A stable asset can lose its peg, so watch the peg and the reserves behind it before adding funds.`;
+    case 'rwa': return ` A real-world asset depends on its issuer and custodian, so check who holds the underlying asset before depositing.`;
+    case 'insurance': return ` A cover payout depends on the claims assessment, so read which events the policy actually covers before buying.`;
+    default: return ` Any smart contract can carry a bug, so keep the position small and check the protocol's audits before adding funds.`;
+  }
+}
+
+/** The wallet step, by the cheapest chain's family: the wallet app differs by chain, so the step names the right one. Creating a wallet costs no gas; the first funded transaction is priced in step 2. */
+function walletTextFor(chain: string): string {
+  switch (chainFamily(chain)) {
+    case 'evm': return `Create a fresh EVM wallet, for example in MetaMask or Rabby, that holds only the funds you plan to farm, and keep its seed phrase offline.`;
+    case 'solana': return `Create a fresh Solana wallet, for example in Phantom or Solflare, that holds only the funds you plan to farm, and keep its seed phrase offline.`;
+    case 'bitcoin': return `Create a fresh Bitcoin wallet, for example in Sparrow or Xverse, that holds only the funds you plan to farm, and keep its seed phrase offline.`;
+    case 'cosmos': return `Create a fresh Cosmos wallet, for example in Keplr, that holds only the funds you plan to farm, and keep its seed phrase offline.`;
+    default: return `Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.`;
+  }
+}
+
+/** The claim step, by kind: withdrawing differs by what the position is — vault shares are redeemed, liquidity is removed, a borrow is repaid, a hedge is closed, a stake is unstaked — so the step says which one, before the claim itself. */
+function claimTextFor(p: SnapshotProtocol): string {
+  const name = p.name;
+  switch (categoryKind(p)) {
+    case 'curator': return `Before you withdraw, redeem the vault shares in the protocol's own app and check the redemption delay, then open its rewards page and claim only from the link it publishes, then log the wallet, dates and every transaction.`;
+    case 'dex': return `Before you withdraw, remove the liquidity in the protocol's own app and check what the position is worth, then open its rewards page and claim only from the link it publishes, then log the wallet, dates and every transaction.`;
+    case 'staking': return `Before you withdraw, open the protocol's own staking and rewards page and claim only from the link it publishes; unstaking can take days, so start the withdrawal before you need the funds, then log the wallet, dates and every transaction.`;
+    case 'lending': return `Before you withdraw, repay any borrow and withdraw the supply in the protocol's own app, then open its rewards page and claim only from the link it publishes, then log the wallet, dates and every transaction.`;
+    case 'perps': return `Before you withdraw, close any open hedge in the protocol's own app, then open its rewards page and claim only from the link it publishes, then log the wallet, dates and every transaction.`;
+    default: return `Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes, then log the wallet, dates and every transaction.`;
   }
 }
 
@@ -646,8 +693,8 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   const multiChain = p.chains.length > 1 ? ` ${best.chain} is the cheapest of its ${p.chains.length} chains for gas.` : ``;
   return [
     {
-      text: `Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.`,
-      cost: 'under $3 of gas for the first transaction',
+      text: walletTextFor(best.chain),
+      cost: 'no gas to create the wallet',
       time: '5 minutes',
     },
     {
@@ -676,8 +723,8 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       time: '5 minutes',
     },
     {
-      text: `Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes, then log the wallet, dates and every transaction.`,
-      cost: 'nothing but the log',
+      text: claimTextFor(p),
+      cost: 'plus the claim gas counted in the totals above',
       time: '10 minutes',
     },
   ];
@@ -704,11 +751,12 @@ export function topRows(board: BoardRow[], count: number): BoardRow[] {
 }
 
 /** A board row's compact form for data.js; the page builds the farm plan itself. */
-export function radarRow(row: BoardRow): RadarRow {
+export function radarRow(row: BoardRow, watchlist: Set<string>): RadarRow {
   const m = row.model;
   return {
     rank: row.rank,
     slug: row.slug,
+    watchlist: watchlist.has(row.slug),
     name: row.name,
     category: row.category,
     chains: row.chains,
@@ -727,9 +775,20 @@ export function radarRow(row: BoardRow): RadarRow {
   };
 }
 
-/** Per-category board coverage: rows, watchlist rows, median TVL and the category's strongest row, largest category first. */
+/** Per-category board coverage: rows, watchlist rows, median TVL, the live peers' median mcap/TVL, and the category's strongest row, largest category first. */
 export function categoryStats(board: BoardRow[], snapshot: Snapshot): CategoryStat[] {
   const watchlist = new Set(snapshot.watchlist);
+  // The live peers' median mcap/TVL per category, from the same calibration
+  // universe the regression is fitted on: the detail drawer shows it beside
+  // a row's own implied multiple, as context — never as a correction, since
+  // category offsets made the held-out error worse.
+  const liveByCategory = new Map<string, number[]>();
+  for (const p of calibrationUniverse(snapshot)) {
+    const ratio = p.mcap_usd! / p.tvl_usd;
+    const bucket = liveByCategory.get(p.category!);
+    if (bucket === undefined) liveByCategory.set(p.category!, [ratio]);
+    else bucket.push(ratio);
+  }
   const grouped = new Map<string, { rows: BoardRow[]; watchlistRows: number }>();
   for (const row of board) {
     const key = row.category ?? 'Other';
@@ -745,11 +804,13 @@ export function categoryStats(board: BoardRow[], snapshot: Snapshot): CategorySt
     // The board is already ranked, so the first row of a category is its strongest.
     const top = bucket.rows[0]!;
     const tvls = bucket.rows.map((r) => r.tvl_usd).sort((a, b) => a - b);
+    const liveRatios = liveByCategory.get(category);
     stats.push({
       category,
       rows: bucket.rows.length,
       watchlist_rows: bucket.watchlistRows,
       median_tvl_usd: medianOf(tvls),
+      live_median_multiple: liveRatios === undefined ? null : Math.round(medianOf([...liveRatios].sort((a, b) => a - b)) * 1000) / 1000,
       top_slug: top.slug,
       top_name: top.name,
       top_implied_usd: top.implied_value_usd,
@@ -833,7 +894,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     board_size: board.length,
     early_size: early,
     live_size: live.length,
-    rows: board.map(radarRow),
+    rows: board.map((r) => radarRow(r, new Set(snapshot.watchlist))),
     live,
     category_stats: categoryStats(board, snapshot),
     fit,
